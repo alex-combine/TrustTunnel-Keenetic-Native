@@ -1,0 +1,460 @@
+#!/bin/sh
+
+ENABLED=yes
+PROCS=trusttunnel_client
+ARGS="-c /opt/trusttunnel_client/trusttunnel_client.toml"
+PREARGS=""
+DESC="TrustTunnel VPN Client"
+PATH=/opt/sbin:/opt/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+CLIENT_BIN="/opt/trusttunnel_client/trusttunnel_client"
+CONFIG_FILE="/opt/trusttunnel_client/trusttunnel_client.toml"
+MODE_CONF="/opt/trusttunnel_client/mode.conf"
+PID_FILE="/opt/var/run/trusttunnel.pid"
+LOG_FILE="/opt/var/log/trusttunnel.log"
+WATCHDOG_PID_FILE="/opt/var/run/trusttunnel_watchdog.pid"
+HC_STATE_FILE="/opt/var/run/trusttunnel_hc_state"
+START_TS_FILE="/opt/var/run/trusttunnel_start_ts"
+
+LOG_TAG="TrustTunnel"
+MAX_LOG_SIZE=524288  # 512KB
+
+# Load mode (defaults to socks5)
+TT_MODE="socks5"
+TUN_IP=""
+if [ -f "$MODE_CONF" ]; then
+    . "$MODE_CONF"
+fi
+
+TUN_IDX="${TUN_IDX:-0}"
+OPKG_IFACE="opkgtun${TUN_IDX}"
+
+# Health check defaults (overridable via mode.conf)
+HC_ENABLED="${HC_ENABLED:-yes}"
+HC_INTERVAL="${HC_INTERVAL:-30}"
+HC_FAIL_THRESHOLD="${HC_FAIL_THRESHOLD:-3}"
+HC_GRACE_PERIOD="${HC_GRACE_PERIOD:-60}"
+HC_TARGET_URL="${HC_TARGET_URL:-http://connectivitycheck.gstatic.com/generate_204}"
+HC_CURL_TIMEOUT="${HC_CURL_TIMEOUT:-5}"
+HC_SOCKS5_PROXY="${HC_SOCKS5_PROXY:-127.0.0.1:1080}"
+
+[ "$ENABLED" != "yes" ] && exit 0
+
+log_info() {
+    logger -t "$LOG_TAG" "$1"
+}
+
+log_error() {
+    logger -p err -t "$LOG_TAG" "$1"
+}
+
+rotate_log() {
+    if [ -f "$LOG_FILE" ]; then
+        log_size=$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)
+        if [ "$log_size" -gt "$MAX_LOG_SIZE" ]; then
+            mv "$LOG_FILE" "${LOG_FILE}.old"
+            log_info "Log rotated (was ${log_size} bytes)"
+        fi
+    fi
+}
+
+check_prereq() {
+    if [ ! -x "$CLIENT_BIN" ]; then
+        log_error "$CLIENT_BIN not found or not executable"
+        exit 1
+    fi
+    if [ ! -f "$CONFIG_FILE" ]; then
+        log_error "$CONFIG_FILE not found"
+        exit 1
+    fi
+}
+
+remove_stale_tun() {
+    if ip link show "$OPKG_IFACE" >/dev/null 2>&1; then
+        log_info "Stale $OPKG_IFACE found, removing..."
+        ip link set "$OPKG_IFACE" down 2>/dev/null
+        ip link delete "$OPKG_IFACE" 2>/dev/null
+    fi
+}
+
+rename_tun_iface() {
+    log_info "Renaming tun0 to $OPKG_IFACE..."
+    ip link set tun0 down 2>/dev/null
+    ip link set tun0 name "$OPKG_IFACE" 2>/dev/null
+    ip link set "$OPKG_IFACE" up 2>/dev/null
+    # Assign IPv6 address (client binary only sets IPv4)
+    if [ -n "$TUN_IPV6" ]; then
+        ip -6 addr add "$TUN_IPV6/128" dev "$OPKG_IFACE" 2>/dev/null
+        log_info "IPv6 address $TUN_IPV6 assigned to $OPKG_IFACE"
+    fi
+}
+
+wait_and_rename_tun() {
+    if [ "$TT_MODE" != "tun" ]; then
+        return 0
+    fi
+
+    log_info "Waiting for tun0 to appear..."
+    elapsed=0
+    while [ $elapsed -lt 30 ]; do
+        if ip link show tun0 >/dev/null 2>&1; then
+            remove_stale_tun
+            rename_tun_iface
+            if ip link show "$OPKG_IFACE" >/dev/null 2>&1; then
+                log_info "tun0 renamed to $OPKG_IFACE successfully"
+                return 0
+            else
+                log_error "Failed to rename tun0 to $OPKG_IFACE"
+                return 1
+            fi
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    log_error "tun0 did not appear within 30 seconds"
+    return 1
+}
+
+cleanup_tun() {
+    if [ "$TT_MODE" != "tun" ]; then
+        return 0
+    fi
+
+    if ip link show "$OPKG_IFACE" >/dev/null 2>&1; then
+        ip link set "$OPKG_IFACE" down 2>/dev/null
+        log_info "$OPKG_IFACE brought down"
+    fi
+    if ip link show tun0 >/dev/null 2>&1; then
+        ip link set tun0 down 2>/dev/null
+        log_info "tun0 brought down"
+    fi
+}
+
+fix_unrenamed_tun() {
+    if [ "$TT_MODE" != "tun" ]; then
+        return 0
+    fi
+
+    if ip link show tun0 >/dev/null 2>&1; then
+        remove_stale_tun
+        rename_tun_iface
+    fi
+}
+
+check_connectivity() {
+    if [ "$TT_MODE" = "tun" ]; then
+        if ! ip link show "$OPKG_IFACE" >/dev/null 2>&1; then
+            return 1
+        fi
+        curl --interface "$OPKG_IFACE" \
+             --connect-timeout "$HC_CURL_TIMEOUT" \
+             -s -o /dev/null \
+             "$HC_TARGET_URL" >/dev/null 2>&1
+    else
+        curl --socks5 "$HC_SOCKS5_PROXY" \
+             --connect-timeout "$HC_CURL_TIMEOUT" \
+             -s -o /dev/null \
+             "$HC_TARGET_URL" >/dev/null 2>&1
+    fi
+}
+
+get_pid() {
+    if [ -f "$PID_FILE" ]; then
+        pid=$(cat "$PID_FILE" 2>/dev/null)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            echo "$pid"
+            return 0
+        fi
+    fi
+
+    pid=$(pidof "$PROCS" 2>/dev/null | awk '{print $1}')
+    if [ -n "$pid" ]; then
+        echo "$pid"
+        return 0
+    fi
+    return 1
+}
+
+is_running() {
+    pid=$(get_pid)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+watchdog() {
+    echo $$ > "$WATCHDOG_PID_FILE"
+    MAX_RETRIES=10
+    INITIAL_SLEEP=10
+    fail_count=0
+    hc_fail_count=0
+    hc_tick=0
+    hc_first_ok=0
+    HC_TICKS=$((HC_INTERVAL / INITIAL_SLEEP))
+    [ "$HC_TICKS" -lt 1 ] && HC_TICKS=1
+    hc_grace=$((HC_GRACE_PERIOD / INITIAL_SLEEP))
+    trap 'rm -f "$WATCHDOG_PID_FILE" "$HC_STATE_FILE"; exit 0' TERM INT
+    while true; do
+        if ! is_running; then
+            fail_count=$((fail_count + 1))
+            if [ "$fail_count" -gt "$MAX_RETRIES" ]; then
+                log_error "Client failed $MAX_RETRIES times, watchdog giving up"
+                rm -f "$WATCHDOG_PID_FILE" "$HC_STATE_FILE"
+                exit 1
+            fi
+            log_info "Client not running (attempt $fail_count/$MAX_RETRIES), starting..."
+            cleanup_tun
+            start_client
+            # Reset HC state after (re)start
+            hc_fail_count=0
+            hc_tick=0
+            hc_first_ok=0
+            hc_grace=$((HC_GRACE_PERIOD / INITIAL_SLEEP))
+            rm -f "$HC_STATE_FILE"
+            sleep_time=$((INITIAL_SLEEP * fail_count))
+            [ "$sleep_time" -gt 300 ] && sleep_time=300
+            sleep "$sleep_time"
+        else
+            fail_count=0
+            fix_unrenamed_tun
+
+            if [ "$HC_ENABLED" = "yes" ]; then
+                if [ "$hc_grace" -gt 0 ]; then
+                    hc_grace=$((hc_grace - 1))
+                else
+                    hc_tick=$((hc_tick + 1))
+                    if [ "$hc_tick" -ge "$HC_TICKS" ]; then
+                        hc_tick=0
+                        if check_connectivity; then
+                            if [ "$hc_first_ok" -eq 0 ]; then
+                                log_info "Health check: connectivity OK"
+                                hc_first_ok=1
+                            fi
+                            hc_fail_count=0
+                            echo "ok ($(date '+%Y-%m-%d %H:%M:%S'))" > "$HC_STATE_FILE"
+                        else
+                            hc_fail_count=$((hc_fail_count + 1))
+                            log_info "Health check failed ($hc_fail_count/$HC_FAIL_THRESHOLD)"
+                            echo "fail $hc_fail_count/$HC_FAIL_THRESHOLD ($(date '+%Y-%m-%d %H:%M:%S'))" > "$HC_STATE_FILE"
+                            if [ "$hc_fail_count" -ge "$HC_FAIL_THRESHOLD" ]; then
+                                log_error "Health check: $HC_FAIL_THRESHOLD consecutive failures, restarting client"
+                                pid=$(get_pid)
+                                if [ -n "$pid" ]; then
+                                    kill "$pid" 2>/dev/null
+                                    rm -f "$PID_FILE"
+                                fi
+                                cleanup_tun
+                                # Next iteration will detect dead process and restart with backoff
+                            fi
+                        fi
+                    fi
+                fi
+            fi
+
+            sleep "$INITIAL_SLEEP"
+        fi
+    done
+}
+
+start_client() {
+    if is_running; then
+        log_info "$DESC is already running (PID: $(get_pid))"
+        return 1
+    fi
+
+    log_info "Starting $DESC..."
+    rotate_log
+
+    $CLIENT_BIN $ARGS >> "$LOG_FILE" 2>&1 &
+    pid=$!
+    echo "$pid" > "$PID_FILE"
+
+    sleep 2
+
+    if is_running; then
+        log_info "$DESC started (PID: $pid)"
+        wait_and_rename_tun
+        date +%s > "$START_TS_FILE"
+        return 0
+    else
+        log_error "Failed to start $DESC"
+        rm -f "$PID_FILE"
+        return 1
+    fi
+}
+
+stop_watchdog() {
+    if [ -f "$WATCHDOG_PID_FILE" ]; then
+        wpid=$(cat "$WATCHDOG_PID_FILE" 2>/dev/null)
+        if [ -n "$wpid" ] && kill -0 "$wpid" 2>/dev/null; then
+            kill "$wpid" 2>/dev/null
+            sleep 1
+            kill -9 "$wpid" 2>/dev/null
+        fi
+        rm -f "$WATCHDOG_PID_FILE"
+    fi
+
+    pkill -f "/opt/etc/init.d/S99trusttunnel watchdog" 2>/dev/null
+}
+
+start() {
+    check_prereq
+
+    if [ -f "$WATCHDOG_PID_FILE" ]; then
+        wpid=$(cat "$WATCHDOG_PID_FILE" 2>/dev/null)
+        if [ -n "$wpid" ] && kill -0 "$wpid" 2>/dev/null; then
+            log_info "$DESC watchdog is already running"
+            return 1
+        fi
+    fi
+
+    start_client
+
+    log_info "Starting watchdog..."
+    $0 watchdog &
+    disown 2>/dev/null
+
+    log_info "$DESC with watchdog started"
+}
+
+stop() {
+    log_info "Stopping $DESC..."
+
+    stop_watchdog
+
+    pid=$(get_pid)
+    if [ -n "$pid" ]; then
+        kill "$pid" 2>/dev/null
+
+        for i in 1 2 3 4 5; do
+            if ! kill -0 "$pid" 2>/dev/null; then
+                break
+            fi
+            sleep 1
+        done
+
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -9 "$pid" 2>/dev/null
+        fi
+
+        rm -f "$PID_FILE"
+        log_info "$DESC stopped"
+    else
+        rm -f "$PID_FILE"
+        log_info "$DESC is not running"
+    fi
+
+    cleanup_tun
+    rm -f "$HC_STATE_FILE"
+    rm -f "$START_TS_FILE"
+}
+
+restart() {
+    stop
+    sleep 2
+    start
+}
+
+reload() {
+    log_info "Reloading $DESC..."
+
+    # Check if watchdog is alive; if not, do a full restart
+    watchdog_alive=false
+    if [ -f "$WATCHDOG_PID_FILE" ]; then
+        wpid=$(cat "$WATCHDOG_PID_FILE" 2>/dev/null)
+        if [ -n "$wpid" ] && kill -0 "$wpid" 2>/dev/null; then
+            watchdog_alive=true
+        fi
+    fi
+
+    if ! $watchdog_alive; then
+        log_info "Watchdog is not running, performing full restart instead of reload"
+        restart
+        return $?
+    fi
+
+    pid=$(get_pid)
+    if [ -n "$pid" ]; then
+        kill "$pid" 2>/dev/null
+        rm -f "$PID_FILE"
+        sleep 2
+    fi
+
+    log_info "Client will be restarted by watchdog"
+}
+
+status() {
+    echo "Mode: $TT_MODE"
+
+    if is_running; then
+        echo "$DESC is running (PID: $(get_pid))"
+
+        if [ -f "$WATCHDOG_PID_FILE" ]; then
+            wpid=$(cat "$WATCHDOG_PID_FILE" 2>/dev/null)
+            if [ -n "$wpid" ] && kill -0 "$wpid" 2>/dev/null; then
+                echo "Watchdog is running (PID: $wpid)"
+            else
+                echo "Watchdog is NOT running"
+            fi
+        else
+            echo "Watchdog is NOT running"
+        fi
+
+        if [ "$TT_MODE" = "tun" ]; then
+            if ip link show "$OPKG_IFACE" >/dev/null 2>&1; then
+                echo "TUN interface: $OPKG_IFACE is UP"
+            elif ip link show tun0 >/dev/null 2>&1; then
+                echo "TUN interface: tun0 exists (not yet renamed)"
+            else
+                echo "TUN interface: not found"
+            fi
+        fi
+
+        if [ "$HC_ENABLED" = "yes" ]; then
+            if [ -f "$HC_STATE_FILE" ]; then
+                echo "Health check: $(cat "$HC_STATE_FILE" 2>/dev/null)"
+            else
+                echo "Health check: not yet run"
+            fi
+        else
+            echo "Health check: disabled"
+        fi
+
+        return 0
+    else
+        echo "$DESC is not running"
+        return 1
+    fi
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart)
+        restart
+        ;;
+    reload)
+        reload
+        ;;
+    status)
+        status
+        ;;
+    check)
+        if ! is_running; then
+            log_info "WAN reconnect detected, restarting client"
+            reload
+        fi
+        ;;
+    watchdog)
+        watchdog
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|reload|status|check}"
+        exit 1
+        ;;
+esac
+
+exit 0
