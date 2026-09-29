@@ -29,6 +29,19 @@ fi
 TUN_IDX="${TUN_IDX:-0}"
 OPKG_IFACE="opkgtun${TUN_IDX}"
 
+# Attach mode (TUN only): the client attaches to the opkgtunN device that
+# KeeneticOS itself creates for the OpkgTunN interface instead of creating tun0
+# and renaming it. KeeneticOS collects traffic statistics (web UI dashboard)
+# only for its own device, so a renamed tun0 always shows 0.
+# The client config is the single source of truth: attach mode is on when
+# [listener.tun] has use_existing = true (with device_name = "opkgtunN").
+if grep -q '^[[:space:]]*use_existing[[:space:]]*=[[:space:]]*true' "$CONFIG_FILE" 2>/dev/null; then
+    TUN_USE_EXISTING="yes"
+else
+    TUN_USE_EXISTING="no"
+fi
+TUN_MTU="${TUN_MTU:-1280}"
+
 # Health check defaults (overridable via mode.conf)
 HC_ENABLED="${HC_ENABLED:-yes}"
 HC_INTERVAL="${HC_INTERVAL:-30}"
@@ -90,6 +103,7 @@ rename_tun_iface() {
 }
 
 wait_and_rename_tun() {
+    [ "$TUN_USE_EXISTING" = "yes" ] && return 0
     if [ "$TT_MODE" != "tun" ]; then
         return 0
     fi
@@ -117,6 +131,11 @@ wait_and_rename_tun() {
 }
 
 cleanup_tun() {
+    if [ "$TUN_USE_EXISTING" = "yes" ]; then
+        # The device belongs to KeeneticOS: never bring it down or delete it.
+        ip link show tun0 >/dev/null 2>&1 && ip link set tun0 down 2>/dev/null
+        return 0
+    fi
     if [ "$TT_MODE" != "tun" ]; then
         return 0
     fi
@@ -132,6 +151,7 @@ cleanup_tun() {
 }
 
 fix_unrenamed_tun() {
+    [ "$TUN_USE_EXISTING" = "yes" ] && return 0
     if [ "$TT_MODE" != "tun" ]; then
         return 0
     fi
@@ -255,6 +275,31 @@ watchdog() {
     done
 }
 
+ensure_device() {
+    [ "$TT_MODE" = "tun" ] && [ "$TUN_USE_EXISTING" = "yes" ] || return 0
+
+    # KeeneticOS creates opkgtunN when the OpkgTunN interface is created and at boot.
+    elapsed=0
+    while ! ip link show "$OPKG_IFACE" >/dev/null 2>&1 && [ $elapsed -lt 15 ]; do
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    if ! ip link show "$OPKG_IFACE" >/dev/null 2>&1; then
+        # Fallback: create the device ourselves so the VPN keeps working.
+        # Dashboard statistics need the firmware-owned device: reboot the router once.
+        log_info "$OPKG_IFACE not found, creating it (reboot the router to get dashboard statistics)"
+        ip tuntap add dev "$OPKG_IFACE" mode tun 2>/dev/null
+    fi
+    ip link set "$OPKG_IFACE" mtu "$TUN_MTU" 2>/dev/null
+    if [ -n "$TUN_IP" ] && ! ip -4 addr show dev "$OPKG_IFACE" 2>/dev/null | grep -q " $TUN_IP/"; then
+        ip addr add "$TUN_IP/32" dev "$OPKG_IFACE" 2>/dev/null
+    fi
+    if [ -n "$TUN_IPV6" ] && ! ip -6 addr show dev "$OPKG_IFACE" 2>/dev/null | grep -q " $TUN_IPV6/"; then
+        ip -6 addr add "$TUN_IPV6/128" dev "$OPKG_IFACE" 2>/dev/null
+    fi
+    ip link set "$OPKG_IFACE" up 2>/dev/null
+}
+
 start_client() {
     if is_running; then
         log_info "$DESC is already running (PID: $(get_pid))"
@@ -264,6 +309,7 @@ start_client() {
     log_info "Starting $DESC..."
     rotate_log
 
+    ensure_device
     $CLIENT_BIN $ARGS >> "$LOG_FILE" 2>&1 &
     pid=$!
     echo "$pid" > "$PID_FILE"
@@ -272,7 +318,7 @@ start_client() {
 
     if is_running; then
         log_info "$DESC started (PID: $pid)"
-        wait_and_rename_tun
+        [ "$TUN_USE_EXISTING" = "yes" ] || wait_and_rename_tun
         date +%s > "$START_TS_FILE"
         return 0
     else
@@ -400,6 +446,9 @@ status() {
         fi
 
         if [ "$TT_MODE" = "tun" ]; then
+            if [ "$TUN_USE_EXISTING" = "yes" ]; then
+                echo "TUN attach mode: on (client uses the KeeneticOS device $OPKG_IFACE)"
+            fi
             if ip link show "$OPKG_IFACE" >/dev/null 2>&1; then
                 echo "TUN interface: $OPKG_IFACE is UP"
             elif ip link show tun0 >/dev/null 2>&1; then

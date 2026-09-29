@@ -2,7 +2,7 @@
 
 set -e
 
-GITHUB_REPO="artemevsevev/TrustTunnel-Keenetic"
+GITHUB_REPO="alexcombine01-hue/TrustTunnel-Keenetic-Native"
 RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}"
 FALLBACK_REF="main"
 

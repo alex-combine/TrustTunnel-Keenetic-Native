@@ -1,6 +1,12 @@
-# TrustTunnel on Keenetic routers
+# TrustTunnel on Keenetic routers — with dashboard statistics
 
 [🇷🇺 Инструкция на русском языке](README_ru.md)
+
+> An extended version of [TrustTunnel-Keenetic](https://github.com/artemevsevev/TrustTunnel-Keenetic) by Artem Evsevev.
+>
+> **What is new:** the TUN connection (OpkgTunN) finally shows real traffic statistics in the Keenetic web interface — the classic setup always shows 0.
+> Existing installations switch with one command, with automatic rollback if anything goes wrong.
+> Jump to: [Dashboard statistics](#dashboard-statistics-attach-mode) · [Upgrading an existing router](#upgrading-a-router-with-the-classic-setup)
 
 ## Prerequisites
 
@@ -99,25 +105,25 @@ This will create a `config.toml` file that you need to transfer to the router.
 Run a single command on the router:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/artemevsevev/TrustTunnel-Keenetic/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/main/install.sh | sh
 ```
 
 > The script automatically detects the latest stable version (GitHub Release).
 > To install a specific version:
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/artemevsevev/TrustTunnel-Keenetic/main/install.sh | sh -s -- --version v1.0.0
+> curl -fsSL https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --version v2.0.0
 > ```
 
 > To install from the `main` branch (latest dev version):
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/artemevsevev/TrustTunnel-Keenetic/main/install.sh | sh -s -- --dev
+> curl -fsSL https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --dev
 > ```
 
 The installation script will perform the following:
 1. Stop the running TrustTunnel service (if running)
 2. Prompt to select the operation mode (SOCKS5 or TUN); during reconfiguration, the current mode is proposed by default
 3. Automatically determine occupied interfaces (Proxy for SOCKS5, OpkgTun for TUN) and propose the first free index
-4. Download and install autostart scripts (`S99trusttunnel`, `010-trusttunnel.sh`)
+4. Download and install autostart scripts (`S99trusttunnel`, `010-trusttunnel.sh`) and the `tt-stats` helper (`/opt/bin/tt-stats`)
 5. Save the selected mode to `/opt/trusttunnel_client/mode.conf`
 6. Prompt to create an interface (ProxyN for SOCKS5 or OpkgTunN for TUN) in Keenetic; when changing the mode or index, it will delete the old interface
 7. Prompt to install/update the TrustTunnel client (supported architectures: x86_64, aarch64, armv7, mips, mipsel)
@@ -166,12 +172,18 @@ The TUN listener must be configured in `trusttunnel_client.toml`:
 [listener]
 
 [listener.tun]
+device_name = "opkgtun0"
+use_existing = true
 bound_if = ""
 included_routes = []
 excluded_routes = []
 change_system_dns = false
 mtu_size = 1280
 ```
+
+- `device_name` + `use_existing` turn on **attach mode**: the client uses the `opkgtunN` device that KeeneticOS created for `OpkgTunN`, so the web interface shows traffic statistics (client ≥ 1.0.62; `N` = `TUN_IDX` from `mode.conf`). Without these two lines the classic mode is used. Details: [Dashboard statistics](#dashboard-statistics-attach-mode).
+- `included_routes = []` is required in attach mode — routing is done by KeeneticOS.
+- Recommended at the top of the file: `killswitch_enabled = true` (see [Kill switch](#recommended-kill-switch)).
 
 There should be no `[listener.socks]` section in the file.
 
@@ -198,7 +210,7 @@ If you skipped automatic interface creation during installation, add the proxy c
 
 #### TUN Mode
 
-The OpkgTunN interface will automatically appear in the Keenetic web interface after the client starts and renames `tun0` to `opkgtunN` (N = index from `mode.conf`, default is 0). For manual configuration via CLI:
+The installer creates the OpkgTunN interface (N = index from `mode.conf`, default is 0); KeeneticOS creates its `opkgtunN` device for it, and in attach mode the client connects to that device. In the classic mode the interface comes alive after the client starts and `tun0` is renamed to `opkgtunN`. For manual configuration via CLI:
 
 ```bash
 ndmc -c 'interface OpkgTunN'
@@ -214,13 +226,112 @@ ndmc -c 'ip route default OpkgTunN'
 
 > **Important:** The `ip route default` command is necessary for Keenetic's policy-based routing to work correctly through OpkgTunN.
 
+## Dashboard statistics (attach mode)
+
+### The problem
+
+In TUN mode the Keenetic web interface (**Other connections → OpkgTunN**) always shows **0** traffic, although the VPN works. The CLI confirms that the firmware does not count anything:
+
+```
+ndmc -c 'show interface OpkgTun0 stat'
+    rxbytes: 0
+  timestamp: 0.000000
+```
+
+Why: KeeneticOS creates its own kernel device `opkgtunN` for the `OpkgTunN` interface and collects statistics **only for that device**. The classic setup lets the client create `tun0`, deletes the firmware device and renames `tun0` → `opkgtunN`. Routing works (the name matches), but the firmware no longer counts the device.
+
+### The fix
+
+Since version **1.0.62** the TrustTunnel client can attach to an existing TUN device instead of creating its own:
+
+```
+Classic:  client ──creates──> tun0 ──renamed──> opkgtun0      (firmware device deleted)   → dashboard: 0
+Attach:   KeeneticOS ──creates──> opkgtun0 <──attaches── client                           → dashboard: real traffic
+```
+
+```toml
+[listener.tun]
+device_name = "opkgtun0"   # N = TUN_IDX from mode.conf
+use_existing = true
+included_routes = []       # required: with an existing device the client does not manage routes
+```
+
+Without `included_routes = []` the client stops with `Managed routing for an existing TUN device requires sport rule support`. Routing does not change: KeeneticOS routes through `OpkgTunN` in both modes, only the owner of the device changes.
+
+**Tested on:** Keenetic Hero 4G (KN-2310), KeeneticOS 5.1.6 (mips), TrustTunnel client 1.1.7. After the switch and one reboot `show interface OpkgTun0 stat` shows a growing `timestamp`, `rxbytes` equals the kernel counter `/sys/class/net/opkgtun0/statistics/rx_bytes` byte for byte, and the web interface draws the traffic graph.
+
+### New installation
+
+Run `install.sh`, choose TUN, add the lines above to the client config and start the service. The installer creates `OpkgTunN`, and KeeneticOS creates its device right away. Check:
+
+```bash
+tt-stats status
+```
+
+If it says `not yet`, reboot the router once: `tt-stats reboot`.
+
+### Upgrading a router with the classic setup
+
+For routers set up with the original TrustTunnel-Keenetic (or an older version of this one). Your client config and settings are kept; only the attach lines are added.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/main/tt-stats -o /opt/bin/tt-stats
+chmod +x /opt/bin/tt-stats
+tt-stats status            # read-only: what is there now
+tt-stats enable --reboot   # switch safely, then reboot once
+```
+
+One reboot is needed because the classic script has deleted the firmware device; KeeneticOS recreates it at boot. Until the reboot the VPN already works in attach mode, only the counters stay at 0.
+
+**How `tt-stats enable` protects your connection:**
+
+1. **Checks first, changes nothing if any check fails:** TUN mode, client ≥ 1.0.62, `OpkgTunN` exists in KeeneticOS, the VPN works right now.
+2. **Backup:** `S99trusttunnel`, `010-trusttunnel.sh`, client config and `mode.conf` go to `/opt/trusttunnel_client/backup-classic/` with `MD5SUMS`.
+3. **New files are prepared before the service is touched:** the attach-capable scripts are downloaded and syntax-checked (`sh -n`).
+4. **Safety timer:** if the switch does not report success within 10 minutes, the classic setup is restored.
+5. **Verification:** the VPN must answer within 90 s, the client log must confirm the attach, then 3 checks over 60 s. Any failure → automatic rollback.
+6. **Boot guard** (`/opt/etc/init.d/S99ttstats-guard`): after a reboot, if the VPN does not come up within 4 minutes, the classic setup is restored.
+7. **`--reboot`** runs pre-flight checks (attach mode on, backup intact, boot guard installed, VPN works, settings saved) and only then reboots.
+
+Manual rollback at any time:
+
+```bash
+tt-stats disable
+```
+
+All actions are logged to `/opt/var/log/tt-stats.log`.
+
+| Command | What it does |
+|---|---|
+| `tt-stats status` | Mode, client version, device, VPN check, KeeneticOS counters, whether statistics work (read-only) |
+| `tt-stats enable [--reboot]` | Safe switch to attach mode with automatic rollback |
+| `tt-stats disable` | Restore the classic setup from the backup |
+| `tt-stats reboot` | Pre-flight checks, then router reboot |
+| `tt-stats version` | Helper version |
+
+### Recommended: kill switch
+
+Put `killswitch_enabled = true` at the top of `trusttunnel_client.toml`. With `false`, when the VPN server is unreachable, the client may let traffic go directly through the ISP. This setting is independent of attach mode, but worth checking while you are here — `tt-stats status` shows it.
+
+### FAQ
+
+- **Does attach mode change routing, policies or the firewall?** No. KeeneticOS routes through `OpkgTunN` in both modes; only who creates the device changes.
+- **My client is older than 1.0.62.** `tt-stats enable` refuses to switch. Update the client (`install.sh` offers it), then run it again.
+- **SOCKS5 mode?** Attach mode applies to TUN mode only.
+- **MTU?** In attach mode the device MTU comes from `TUN_MTU` in `mode.conf`; `tt-stats enable` sets it from `mtu_size` of the client config and keeps `interface OpkgTunN ip mtu` equal to it.
+- **What if the VPN server itself is down right after a reboot?** The boot guard cannot tell a server outage from a failed switch, so it restores the classic setup to be safe. When the server is back, run `tt-stats enable --reboot` again.
+- **How do I go back?** `tt-stats disable` (or restore the files from `/opt/trusttunnel_client/backup-classic/` by hand).
+
 ## File Structure
 
 ```
 /opt/
+├── bin/
+│   └── tt-stats                    # Dashboard statistics helper: status / enable / disable
 ├── etc/
 │   ├── init.d/
-│   │   └── S99trusttunnel          # Main init script
+│   │   ├── S99trusttunnel          # Main init script
+│   │   └── S99ttstats-guard        # Boot guard (created by tt-stats enable)
 │   └── ndm/
 │       └── wan.d/
 │           └── 010-trusttunnel.sh  # Hook on WAN up
@@ -232,11 +343,13 @@ ndmc -c 'ip route default OpkgTunN'
 │   │   └── trusttunnel_start_ts    # Client start time (for WAN hook grace period)
 │   └── log/
 │       ├── trusttunnel.log         # Work log (rotates at 512 KB)
-│       └── trusttunnel.log.old     # Previous log after rotation
+│       ├── trusttunnel.log.old     # Previous log after rotation
+│       └── tt-stats.log            # tt-stats log (switches, rollbacks, boot guard)
 └── trusttunnel_client/
     ├── trusttunnel_client          # Client binary
     ├── trusttunnel_client.toml     # Configuration
-    └── mode.conf                   # Operation mode (socks5/tun), TUN_IDX, PROXY_IDX, HC settings
+    ├── mode.conf                   # Operation mode (socks5/tun), TUN_IDX, PROXY_IDX, TUN_MTU, HC settings
+    └── backup-classic/             # Classic setup backup made by tt-stats enable (+ MD5SUMS)
 ```
 
 ## Manual Installation
@@ -244,7 +357,7 @@ ndmc -c 'ip route default OpkgTunN'
 If you prefer manual installation instead of the script:
 
 ```bash
-VERSION="v1.0.0"  # Specify the required version (GitHub Release tag)
+VERSION="v2.0.0"  # Specify the required version (GitHub Release tag)
 
 # Create directories
 mkdir -p /opt/etc/init.d
@@ -253,12 +366,17 @@ mkdir -p /opt/var/run
 mkdir -p /opt/var/log
 
 # Init script
-curl -fsSL "https://raw.githubusercontent.com/artemevsevev/TrustTunnel-Keenetic/${VERSION}/S99trusttunnel" -o /opt/etc/init.d/S99trusttunnel
+curl -fsSL "https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/${VERSION}/S99trusttunnel" -o /opt/etc/init.d/S99trusttunnel
 chmod +x /opt/etc/init.d/S99trusttunnel
 
 # WAN hook
-curl -fsSL "https://raw.githubusercontent.com/artemevsevev/TrustTunnel-Keenetic/${VERSION}/010-trusttunnel.sh" -o /opt/etc/ndm/wan.d/010-trusttunnel.sh
+curl -fsSL "https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/${VERSION}/010-trusttunnel.sh" -o /opt/etc/ndm/wan.d/010-trusttunnel.sh
 chmod +x /opt/etc/ndm/wan.d/010-trusttunnel.sh
+
+# Dashboard statistics helper
+mkdir -p /opt/bin
+curl -fsSL "https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/${VERSION}/tt-stats" -o /opt/bin/tt-stats
+chmod +x /opt/bin/tt-stats
 
 # Ensure the client is executable
 chmod +x /opt/trusttunnel_client/trusttunnel_client
@@ -353,6 +471,14 @@ The current health check status is shown in the `status` output:
 ```
 
 ### TUN Mode (OpkgTunN)
+
+**Attach mode** (`use_existing = true` in the client config):
+- KeeneticOS creates the `opkgtunN` device for the `OpkgTunN` interface (when the interface is created and at every boot)
+- The init script waits for the device (up to 15 seconds), sets MTU (`TUN_MTU`) and addresses, and starts the client
+- The client attaches to the device; KeeneticOS counts its traffic and shows it in the web interface
+- If the device is missing, the init script creates it itself so the VPN keeps working (statistics appear after one reboot)
+
+**Classic mode** (no `use_existing`):
 - TrustTunnel Client creates a `tun0` interface
 - The init script waits for `tun0` to appear (up to 30 seconds) and renames it to `opkgtunN` (N = index from `mode.conf`)
 - Keenetic recognizes `opkgtunN` as an `OpkgTunN` interface and applies routing/firewall
@@ -443,6 +569,14 @@ HC_ENABLED="no"
 /opt/etc/init.d/S99trusttunnel restart
 ```
 
+### The web interface shows 0 traffic for OpkgTunN
+```bash
+tt-stats status
+```
+- `Attach mode: no` → see [Upgrading a router with the classic setup](#upgrading-a-router-with-the-classic-setup)
+- `Attach mode: yes`, statistics `not yet` → reboot once: `tt-stats reboot`
+- `Client version ... TOO OLD` → update the client to 1.0.62 or newer
+
 ### OpkgTunN isn't visible in the Keenetic web interface
 ```bash
 # Check that the interface is created in Keenetic (replace N with index from mode.conf)
@@ -459,3 +593,7 @@ ndmc -c 'interface OpkgTunN up'
 ndmc -c 'ip route default OpkgTunN'
 ndmc -c 'system configuration save'
 ```
+
+## Credits
+
+Based on [TrustTunnel-Keenetic](https://github.com/artemevsevev/TrustTunnel-Keenetic) by Artem Evsevev (MIT). Attach mode relies on `use_existing` in the [TrustTunnel](https://github.com/TrustTunnel/TrustTunnel) client.

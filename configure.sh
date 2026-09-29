@@ -20,6 +20,7 @@ cleanup_on_error() {
         echo "  rm -f /opt/etc/init.d/S99trusttunnel"
         echo "  rm -f /opt/etc/ndm/wan.d/010-trusttunnel.sh"
         echo "  rm -f /opt/trusttunnel_client/mode.conf"
+        echo "  rm -f /opt/bin/tt-stats"
     fi
 }
 trap cleanup_on_error EXIT
@@ -185,6 +186,12 @@ echo "Downloading 010-trusttunnel.sh..."
 curl -fsSL "$REPO_URL/010-trusttunnel.sh" -o /opt/etc/ndm/wan.d/010-trusttunnel.sh
 chmod +x /opt/etc/ndm/wan.d/010-trusttunnel.sh
 
+echo "Downloading tt-stats (dashboard statistics helper)..."
+mkdir -p /opt/bin
+curl -fsSL "$REPO_URL/tt-stats" -o /opt/bin/tt-stats
+sed -i "s|^TTS_REPO_URL=.*|TTS_REPO_URL=\"\${TTS_REPO_URL:-$REPO_URL}\"|" /opt/bin/tt-stats
+chmod +x /opt/bin/tt-stats
+
 # === Write mode.conf ===
 echo "Saving mode to /opt/trusttunnel_client/mode.conf..."
 cat > /opt/trusttunnel_client/mode.conf <<MEOF
@@ -194,6 +201,8 @@ TUN_IP="$TUN_IP"
 TUN_IPV6="$TUN_IPV6"
 TUN_IDX="$TUN_IDX"
 PROXY_IDX="$PROXY_IDX"
+# MTU of the TUN device (keep equal to mtu_size in the client config)
+TUN_MTU="1280"
 
 # Health check settings (uncomment to customize)
 # HC_ENABLED="yes"
@@ -295,6 +304,23 @@ else
     echo "TrustTunnel installation skipped."
 fi
 
+# === Attach mode support (dashboard statistics) needs client >= 1.0.62 ===
+CLIENT_VERSION=""
+if [ -x /opt/trusttunnel_client/trusttunnel_client ]; then
+    CLIENT_VERSION=$(/opt/trusttunnel_client/trusttunnel_client --version 2>/dev/null | awk '{print $2; exit}')
+fi
+if [ "$TT_MODE" = "tun" ] && [ -n "$CLIENT_VERSION" ]; then
+    if awk -v a="$CLIENT_VERSION" -v b="1.0.62" 'BEGIN {
+            split(a, x, "."); split(b, y, ".")
+            for (i = 1; i <= 3; i++) { if (x[i] + 0 > y[i] + 0) exit 0; if (x[i] + 0 < y[i] + 0) exit 1 }
+            exit 0 }'; then
+        echo "Client $CLIENT_VERSION supports attach mode (dashboard statistics)."
+    else
+        echo "WARNING: client $CLIENT_VERSION is older than 1.0.62 and cannot attach to the KeeneticOS device."
+        echo "         Update the client, or do not add use_existing/device_name to the config."
+    fi
+fi
+
 echo ""
 echo "=== Installation completed ==="
 echo ""
@@ -304,11 +330,23 @@ if [ "$TT_MODE" = "tun" ]; then
     echo ""
     echo "   Add the [listener.tun] section to the client configuration:"
     echo "   [listener.tun]"
+    echo "   device_name = \"opkgtun${TUN_IDX}\""
+    echo "   use_existing = true"
     echo "   included_routes = []"
     echo "   excluded_routes = []"
     echo "   change_system_dns = false"
     echo ""
+    echo "   device_name + use_existing: the client attaches to the device that KeeneticOS"
+    echo "   created for OpkgTun${TUN_IDX}, so traffic statistics appear in the web UI"
+    echo "   (needs client >= 1.0.62). Without these two lines the classic mode is used."
+    echo ""
+    echo "   Recommended at the top of the file: killswitch_enabled = true"
+    echo "   (otherwise the client sends traffic directly when the server is unreachable)."
+    echo ""
     echo "   The [listener.socks] section should not be in the file."
+    echo ""
+    echo "   Upgrading a router that already ran the classic setup? Keep your config and run:"
+    echo "   tt-stats enable --reboot   (safe switch with automatic rollback)"
 else
     echo ""
     echo "   The client configuration must contain the [listener.socks] section."
@@ -316,6 +354,9 @@ else
 fi
 echo ""
 echo "2. Start the service: /opt/etc/init.d/S99trusttunnel start"
+if [ "$TT_MODE" = "tun" ]; then
+    echo "3. Check dashboard statistics: tt-stats status"
+fi
 echo ""
 
 exit 0

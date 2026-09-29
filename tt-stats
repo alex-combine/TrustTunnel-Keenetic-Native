@@ -1,0 +1,371 @@
+#!/opt/bin/sh
+#
+# tt-stats — traffic statistics in the Keenetic web UI for the TrustTunnel TUN
+# connection (OpkgTunN), with safe switching and automatic rollback.
+#
+# Why: KeeneticOS creates its own opkgtunN device for the OpkgTunN interface and
+# collects dashboard statistics only for that device. The classic setup lets the
+# client create tun0, deletes the firmware device and renames tun0 -> opkgtunN,
+# so the dashboard always shows 0. In attach mode the client attaches to the
+# firmware device (listener.tun device_name + use_existing, client >= 1.0.62).
+#
+# Commands:
+#   status             show mode, client version, dashboard statistics state
+#   enable [--reboot]  switch to attach mode (auto-rollback if the VPN does not come up)
+#   disable            return to the classic mode from the backup
+#   reboot             run pre-flight checks and reboot the router
+#   guard              boot check (called by /opt/etc/init.d/S99ttstats-guard)
+#
+# Log: /opt/var/log/tt-stats.log
+
+TTS_VERSION="2.0.0"
+SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+TTS_REPO_URL="${TTS_REPO_URL:-https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/main}"
+
+PATH=/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+[ -z "$TZ" ] && [ -f /etc/TZ ] && TZ="$(cat /etc/TZ)" && export TZ
+
+TT_DIR="/opt/trusttunnel_client"
+CLIENT_BIN="$TT_DIR/trusttunnel_client"
+CONFIG_FILE="$TT_DIR/trusttunnel_client.toml"
+MODE_CONF="$TT_DIR/mode.conf"
+INIT_SCRIPT="/opt/etc/init.d/S99trusttunnel"
+WAN_HOOK="/opt/etc/ndm/wan.d/010-trusttunnel.sh"
+GUARD_SCRIPT="/opt/etc/init.d/S99ttstats-guard"
+CLIENT_LOG="/opt/var/log/trusttunnel.log"
+BACKUP_DIR="$TT_DIR/backup-classic"
+LOG="/opt/var/log/tt-stats.log"
+DONE_FLAG="/tmp/tt-stats.done"
+MIN_CLIENT_VERSION="1.0.62"
+
+TT_MODE="socks5"
+TUN_IDX="0"
+TUN_USE_EXISTING="no"
+HC_TARGET_URL="http://connectivitycheck.gstatic.com/generate_204"
+# shellcheck source=/dev/null
+[ -f "$MODE_CONF" ] && . "$MODE_CONF"
+TUN_IDX="${TUN_IDX:-0}"
+OPKG_IFACE="opkgtun${TUN_IDX}"
+NDM_IFACE="OpkgTun${TUN_IDX}"
+
+# The client config is the single source of truth for attach mode
+attach_in_config() { grep -q '^[[:space:]]*use_existing[[:space:]]*=[[:space:]]*true' "$CONFIG_FILE" 2>/dev/null; }
+if attach_in_config; then TUN_USE_EXISTING="yes"; else TUN_USE_EXISTING="no"; fi
+
+# ---------------------------------------------------------------- helpers ---
+
+ts()  { date '+%Y-%m-%d %H:%M:%S'; }
+log() { mkdir -p "$(dirname "$LOG")"; echo "$(ts) $*" >> "$LOG"; logger -t tt-stats "$*" 2>/dev/null; }
+say() { echo "$*"; log "$*"; }
+die() { echo "Error: $*" >&2; log "ERROR: $*"; exit 1; }
+
+ndm() { ndmc -c "$1" 2>/dev/null | tr -d '\033' | sed 's/\[K//g'; }
+
+client_version() {
+    [ -x "$CLIENT_BIN" ] || return 1
+    "$CLIENT_BIN" --version 2>/dev/null | awk '{print $2; exit}'
+}
+
+# version_ge A B -> true if A >= B (numeric dotted versions)
+version_ge() {
+    awk -v a="$1" -v b="$2" 'BEGIN {
+        na = split(a, x, "."); nb = split(b, y, ".")
+        n = (na > nb) ? na : nb
+        for (i = 1; i <= n; i++) {
+            xi = (i <= na) ? x[i] + 0 : 0; yi = (i <= nb) ? y[i] + 0 : 0
+            if (xi > yi) exit 0
+            if (xi < yi) exit 1
+        }
+        exit 0
+    }'
+}
+
+# VPN works = HTTP check through the tunnel device succeeds (same idea as S99 health check)
+vpn_ok() {
+    code=$(curl --interface "$OPKG_IFACE" -s -o /dev/null -m 8 -w '%{http_code}' "$HC_TARGET_URL" 2>/dev/null)
+    case "$code" in 2??|3??) return 0 ;; *) return 1 ;; esac
+}
+
+wait_vpn() {  # $1 = seconds
+    _w=0
+    while [ "$_w" -lt "$1" ]; do
+        vpn_ok && return 0
+        sleep 5
+        _w=$((_w + 5))
+    done
+    return 1
+}
+
+client_attached() {
+    tail -n 400 "$CLIENT_LOG" 2>/dev/null | grep -q "Device $OPKG_IFACE attached (use_existing = true)"
+}
+
+# Dashboard statistics work when KeeneticOS polls the device counters (timestamp != 0)
+ndm_stat_line() {
+    ndm "show interface $NDM_IFACE stat" | awk -F': *' '
+        /^ *rxbytes:/ {r=$2} /^ *txbytes:/ {t=$2} /^ *timestamp:/ {s=$2}
+        END {printf "rxbytes=%s txbytes=%s timestamp=%s", r, t, s}'
+}
+stats_working() {
+    case "$(ndm_stat_line)" in
+        *"timestamp=0.000000"*|*"timestamp=") return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+toml_get() {  # $1 = key inside [listener.tun]
+    awk -v k="$1" '
+        /^\[/ {insec = ($0 ~ /^\[listener\.tun\][[:space:]]*$/); next}
+        insec && $0 ~ "^[[:space:]]*" k "[[:space:]]*=" {sub(/^[^=]*=[[:space:]]*/, ""); print; exit}
+    ' "$CONFIG_FILE" 2>/dev/null
+}
+
+# Put device_name / use_existing / included_routes = [] right under [listener.tun];
+# old values of these keys in that section are dropped (multi-line arrays too)
+toml_enable_attach() {
+    awk -v dev="$OPKG_IFACE" '
+        skip { if ($0 ~ /\]/) skip = 0; next }
+        /^\[/ {
+            insec = ($0 ~ /^\[listener\.tun\][[:space:]]*$/)
+            print
+            if (insec) {
+                print "device_name = \"" dev "\""
+                print "use_existing = true"
+                print "included_routes = []"
+            }
+            next
+        }
+        insec && /^[[:space:]]*(device_name|use_existing)[[:space:]]*=/ {next}
+        insec && /^[[:space:]]*included_routes[[:space:]]*=/ {
+            if ($0 ~ /\[/ && $0 !~ /\]/) skip = 1
+            next
+        }
+        {print}
+    ' "$1"
+}
+
+mode_conf_set() {  # $1 = key, $2 = value
+    if grep -q "^$1=" "$MODE_CONF"; then
+        sed -i "s|^$1=.*|$1=\"$2\"|" "$MODE_CONF"
+    else
+        printf '%s="%s"\n' "$1" "$2" >> "$MODE_CONF"
+    fi
+}
+
+stop_service() {
+    "$INIT_SCRIPT" stop >/dev/null 2>&1
+    sleep 2
+    pkill -f "S99trusttunnel watchdog" 2>/dev/null
+    for p in $(pidof trusttunnel_client); do kill "$p" 2>/dev/null; done
+    sleep 2
+    for p in $(pidof trusttunnel_client); do kill -9 "$p" 2>/dev/null; done
+}
+
+install_guard() {
+    cat > "$GUARD_SCRIPT" <<EOF
+#!/bin/sh
+# tt-stats boot guard: after boot, if attach mode is on and the VPN does not come
+# up within 4 minutes, return to the classic mode automatically.
+case "\$1" in
+    start) ( $SELF guard ) </dev/null >/dev/null 2>&1 & ;;
+esac
+exit 0
+EOF
+    chmod +x "$GUARD_SCRIPT"
+}
+
+# --------------------------------------------------------------- commands ---
+
+cmd_status() {
+    ver=$(client_version)
+    echo "tt-stats $TTS_VERSION"
+    echo "Mode:                 $TT_MODE (interface $NDM_IFACE / device $OPKG_IFACE)"
+    if [ -n "$ver" ]; then
+        if version_ge "$ver" "$MIN_CLIENT_VERSION"; then s="supports attach mode"; else s="TOO OLD for attach mode (need >= $MIN_CLIENT_VERSION)"; fi
+        echo "Client version:       $ver ($s)"
+    else
+        echo "Client version:       not installed"
+    fi
+    [ "$TT_MODE" = "tun" ] || { echo "Attach mode applies to TUN mode only."; return 0; }
+    echo "Attach mode:          ${TUN_USE_EXISTING}"
+    echo "Client config:        device_name=$(toml_get device_name) use_existing=$(toml_get use_existing) included_routes=$(toml_get included_routes)"
+    echo "Kill switch (client): $(awk -F'= *' '/^killswitch_enabled/ {print $2; exit}' "$CONFIG_FILE" 2>/dev/null)"
+    grep -q '^ensure_device()' "$INIT_SCRIPT" 2>/dev/null && i="supports attach mode" || i="classic only"
+    echo "Init script:          $i"
+    if ip link show "$OPKG_IFACE" >/dev/null 2>&1; then
+        echo "Device $OPKG_IFACE:      present, carrier=$(cat /sys/class/net/"$OPKG_IFACE"/carrier 2>/dev/null)"
+    else
+        echo "Device $OPKG_IFACE:      absent"
+    fi
+    vpn_ok && v="OK" || v="NO RESPONSE"
+    echo "VPN check:            $v"
+    echo "KeeneticOS counters:  $(ndm_stat_line)"
+    if stats_working; then
+        echo "Dashboard statistics: WORKING"
+    elif [ "$TUN_USE_EXISTING" = "yes" ]; then
+        echo "Dashboard statistics: not yet — reboot the router once: tt-stats reboot"
+    else
+        echo "Dashboard statistics: off (classic mode) — enable: tt-stats enable"
+    fi
+    [ -f "$BACKUP_DIR/MD5SUMS" ] && echo "Classic backup:       $BACKUP_DIR"
+    [ -x "$GUARD_SCRIPT" ] && echo "Boot guard:           installed"
+    return 0
+}
+
+cmd_disable() {  # $1 = reason
+    [ -f "$BACKUP_DIR/MD5SUMS" ] || die "no backup in $BACKUP_DIR — nothing to restore"
+    touch "$DONE_FLAG"
+    say "=== Returning to the classic mode. Reason: ${1:-manual}"
+    stop_service
+    cp "$BACKUP_DIR/S99trusttunnel" "$INIT_SCRIPT" && chmod +x "$INIT_SCRIPT"
+    cp "$BACKUP_DIR/trusttunnel_client.toml" "$CONFIG_FILE"
+    cp "$BACKUP_DIR/mode.conf" "$MODE_CONF"
+    [ -f "$BACKUP_DIR/010-trusttunnel.sh" ] && cp "$BACKUP_DIR/010-trusttunnel.sh" "$WAN_HOOK" && chmod +x "$WAN_HOOK"
+    if (cd / && md5sum -c "$BACKUP_DIR/MD5SUMS" >/dev/null 2>&1); then
+        say "Backup files restored (checksums OK)"
+    else
+        say "WARNING: restored files do not match the backup checksums"
+    fi
+    # shellcheck source=/dev/null
+    . "$MODE_CONF"
+    TUN_USE_EXISTING="no"
+    "$INIT_SCRIPT" start >/dev/null 2>&1
+    if wait_vpn 120; then say "Classic mode is back, VPN works"; rm -f "$GUARD_SCRIPT"; return 0; fi
+    say "VPN did not respond in 120 s — restarting once more"
+    "$INIT_SCRIPT" restart >/dev/null 2>&1
+    if wait_vpn 120; then say "Classic mode is back, VPN works"; rm -f "$GUARD_SCRIPT"; return 0; fi
+    say "VPN still does not respond (maybe no connection to the server at all). Classic files are in place; the watchdog keeps retrying."
+    rm -f "$GUARD_SCRIPT"
+    return 1
+}
+
+cmd_enable() {  # $1 = --reboot (optional)
+    [ "$TT_MODE" = "tun" ] || die "attach mode needs TUN mode (TT_MODE=tun in $MODE_CONF)"
+    [ -f "$CONFIG_FILE" ] || die "$CONFIG_FILE not found"
+    grep -q '^\[listener\.tun\]' "$CONFIG_FILE" || die "no [listener.tun] section in $CONFIG_FILE"
+    ver=$(client_version) || die "client not found: $CLIENT_BIN"
+    version_ge "$ver" "$MIN_CLIENT_VERSION" || die "client $ver is too old, need >= $MIN_CLIENT_VERSION (update the client first)"
+    ndm "show interface $NDM_IFACE" | grep -q "id: $NDM_IFACE" || die "interface $NDM_IFACE not found in KeeneticOS"
+
+    if [ "$TUN_USE_EXISTING" = "yes" ]; then
+        say "Attach mode is already on."
+        if stats_working; then say "Dashboard statistics: WORKING"; else say "Statistics start after one router reboot: tt-stats reboot"; fi
+        [ "$1" = "--reboot" ] && cmd_reboot
+        return 0
+    fi
+
+    vpn_ok || die "the VPN does not work right now — fix it first, otherwise the switch cannot be verified"
+
+    # 1. Backup of the working classic setup
+    mkdir -p "$BACKUP_DIR"
+    cp "$INIT_SCRIPT" "$BACKUP_DIR/S99trusttunnel"
+    cp "$CONFIG_FILE" "$BACKUP_DIR/trusttunnel_client.toml"
+    cp "$MODE_CONF" "$BACKUP_DIR/mode.conf"
+    [ -f "$WAN_HOOK" ] && cp "$WAN_HOOK" "$BACKUP_DIR/010-trusttunnel.sh"
+    chmod 600 "$BACKUP_DIR/trusttunnel_client.toml"
+    files="$INIT_SCRIPT $CONFIG_FILE $MODE_CONF"
+    [ -f "$WAN_HOOK" ] && files="$files $WAN_HOOK"
+    # shellcheck disable=SC2086
+    md5sum $files > "$BACKUP_DIR/MD5SUMS"
+    say "=== Switching to attach mode (client $ver). Backup: $BACKUP_DIR"
+
+    # 2. New files are prepared BEFORE touching the running service
+    work=$(mktemp -d /tmp/tt-stats.XXXXXX)
+    if ! grep -q '^ensure_device()' "$INIT_SCRIPT"; then
+        say "Downloading attach-capable S99trusttunnel and 010-trusttunnel.sh..."
+        curl -fsSL "$TTS_REPO_URL/S99trusttunnel" -o "$work/S99trusttunnel" || die "download of S99trusttunnel failed"
+        curl -fsSL "$TTS_REPO_URL/010-trusttunnel.sh" -o "$work/010-trusttunnel.sh" || die "download of 010-trusttunnel.sh failed"
+        sh -n "$work/S99trusttunnel" || die "downloaded S99trusttunnel is invalid"
+        grep -q '^ensure_device()' "$work/S99trusttunnel" || die "downloaded S99trusttunnel has no attach support"
+        sh -n "$work/010-trusttunnel.sh" || die "downloaded 010-trusttunnel.sh is invalid"
+    fi
+    toml_enable_attach "$CONFIG_FILE" > "$work/trusttunnel_client.toml"
+    for want in "^device_name = \"$OPKG_IFACE\"" '^use_existing = true' '^included_routes = \[\]'; do
+        grep -q "$want" "$work/trusttunnel_client.toml" || die "could not prepare the client config ($want)"
+    done
+    mtu=$(toml_get mtu_size | tr -dc '0-9'); [ -n "$mtu" ] || mtu=1280
+
+    # 3. Dead man's switch: if this run does not report success within 10 minutes — roll back
+    rm -f "$DONE_FLAG"
+    ( sleep 600; [ -f "$DONE_FLAG" ] || "$SELF" disable "safety timer: the switch did not finish in 10 minutes" ) </dev/null >/dev/null 2>&1 &
+
+    # 4. Switch
+    stop_service
+    [ -f "$work/S99trusttunnel" ] && cp "$work/S99trusttunnel" "$INIT_SCRIPT" && chmod +x "$INIT_SCRIPT"
+    [ -f "$work/010-trusttunnel.sh" ] && cp "$work/010-trusttunnel.sh" "$WAN_HOOK" && chmod +x "$WAN_HOOK"
+    cp "$work/trusttunnel_client.toml" "$CONFIG_FILE"
+    rm -rf "$work"
+    mode_conf_set TUN_MTU "$mtu"
+    cur_mtu=$(ndm "show running-config" | awk -v i="interface $NDM_IFACE" '$0 == i {f = 1; next} f && /^!/ {exit} f && $1 == "ip" && $2 == "mtu" {print $3; exit}')
+    if [ "$cur_mtu" != "$mtu" ]; then
+        # KeeneticOS applies its own MTU to its device: keep it equal to the client mtu_size
+        ndmc -c "interface $NDM_IFACE ip mtu $mtu" >/dev/null 2>&1
+        ndmc -c "system configuration save" >/dev/null 2>&1
+    fi
+    install_guard
+    TUN_USE_EXISTING=yes
+    t0=$(date +%s)
+    "$INIT_SCRIPT" start >/dev/null 2>&1
+
+    # 5. Verify: VPN up within 90 s, client attached, stable for 60 s
+    wait_vpn 90 || { cmd_disable "VPN did not come up in attach mode within 90 s"; exit 1; }
+    client_attached || { cmd_disable "client did not attach to $OPKG_IFACE"; exit 1; }
+    say "VPN is up in attach mode after $(( $(date +%s) - t0 )) s, checking stability for 60 s..."
+    for i in 1 2 3; do
+        sleep 20
+        vpn_ok || { cmd_disable "VPN dropped within the first minute (check $i)"; exit 1; }
+    done
+    touch "$DONE_FLAG"
+    say "SUCCESS: attach mode is on. MTU $mtu, boot guard installed."
+    if stats_working; then
+        say "Dashboard statistics: WORKING"
+    else
+        say "Dashboard statistics start after one router reboot (KeeneticOS recreates its own $OPKG_IFACE): tt-stats reboot"
+        [ "$1" = "--reboot" ] && cmd_reboot
+    fi
+    return 0
+}
+
+# The checks are evaluated later, so single quotes are intended here.
+# shellcheck disable=SC2016
+cmd_reboot() {
+    bad=0
+    chk() { if eval "$2"; then say "  ok   $1"; else say "  FAIL $1"; bad=1; fi; }
+    say "=== Pre-flight checks before reboot"
+    chk "attach mode is on"                 '[ "$TUN_USE_EXISTING" = "yes" ]'
+    chk "init script supports attach mode"  'grep -q "^ensure_device()" "$INIT_SCRIPT"'
+    chk "client config has use_existing"    'grep -q "^use_existing = true" "$CONFIG_FILE"'
+    chk "VPN works now"                     'vpn_ok'
+    chk "classic backup is intact"          '[ -f "$BACKUP_DIR/MD5SUMS" ] && [ -f "$BACKUP_DIR/S99trusttunnel" ] && [ -f "$BACKUP_DIR/trusttunnel_client.toml" ]'
+    chk "boot guard is installed"           '[ -x "$GUARD_SCRIPT" ]'
+    chk "KeeneticOS settings saved"         'ndmc -c "system configuration save" >/dev/null 2>&1'
+    if [ "$bad" -ne 0 ]; then say "Pre-flight failed — NOT rebooting"; return 1; fi
+    say "All checks passed — rebooting the router in 5 s (the boot guard will verify the VPN)"
+    sleep 5
+    ndmc -c "system reboot" >/dev/null 2>&1
+}
+
+cmd_guard() {
+    [ "$TT_MODE" = "tun" ] && [ "$TUN_USE_EXISTING" = "yes" ] || exit 0
+    log "boot guard: waiting for the VPN up to 4 minutes"
+    if wait_vpn 240; then
+        if stats_working; then
+            log "boot guard: VPN works, dashboard statistics WORKING ($(ndm_stat_line))"
+        else
+            log "boot guard: VPN works, but KeeneticOS does not count the device yet ($(ndm_stat_line))"
+        fi
+        exit 0
+    fi
+    cmd_disable "after boot the VPN did not come up in attach mode within 4 minutes"
+}
+
+case "$1" in
+    status|"") cmd_status ;;
+    enable)    cmd_enable "$2" ;;
+    disable)   cmd_disable "${2:-manual}" ;;
+    reboot)    cmd_reboot ;;
+    guard)     cmd_guard ;;
+    version)   echo "$TTS_VERSION" ;;
+    *) echo "Usage: tt-stats {status|enable [--reboot]|disable|reboot|version}"; exit 1 ;;
+esac

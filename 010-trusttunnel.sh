@@ -11,6 +11,10 @@ fi
 
 TUN_IDX="${TUN_IDX:-0}"
 OPKG_IFACE="opkgtun${TUN_IDX}"
+
+# Attach mode is on when the client config has use_existing = true
+TUN_USE_EXISTING="no"
+grep -q '^[[:space:]]*use_existing[[:space:]]*=[[:space:]]*true' /opt/trusttunnel_client/trusttunnel_client.toml 2>/dev/null && TUN_USE_EXISTING="yes"
 NDMC_IFACE="OpkgTun${TUN_IDX}"
 
 # Skip reload when triggered by our own TUN interface
@@ -50,9 +54,14 @@ fi
 logger -t "$LOG_TAG" "WAN interface up, reloading TrustTunnel..."
 
 if [ "$TT_MODE" = "tun" ]; then
-    logger -t "$LOG_TAG" "TUN mode: bringing down tunnel interfaces before reload..."
-    ip link set "$OPKG_IFACE" down 2>/dev/null
-    ip link set tun0 down 2>/dev/null
+    if [ "$TUN_USE_EXISTING" = "yes" ]; then
+        # Attach mode: opkgtunN belongs to KeeneticOS, keep it up.
+        ip link set tun0 down 2>/dev/null
+    else
+        logger -t "$LOG_TAG" "TUN mode: bringing down tunnel interfaces before reload..."
+        ip link set "$OPKG_IFACE" down 2>/dev/null
+        ip link set tun0 down 2>/dev/null
+    fi
 fi
 
 /opt/etc/init.d/S99trusttunnel reload
