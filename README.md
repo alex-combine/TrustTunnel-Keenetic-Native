@@ -105,18 +105,20 @@ This will create a `config.toml` file that you need to transfer to the router.
 Run a single command on the router:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/main/install.sh | sh
+curl -fsSL https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download/install.sh | sh
 ```
+
+> The scripts are downloaded from GitHub Releases, so GitHub counts downloads — this is the only usage statistics. Nothing about your router is sent anywhere.
 
 > The script automatically detects the latest stable version (GitHub Release).
 > To install a specific version:
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --version v2.0.0
+> curl -fsSL https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --version v2.0.1
 > ```
 
 > To install from the `main` branch (latest dev version):
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --dev
+> curl -fsSL https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --dev
 > ```
 
 The installation script will perform the following:
@@ -275,7 +277,7 @@ If it says `not yet`, reboot the router once: `tt-stats reboot`.
 For routers set up with the original TrustTunnel-Keenetic (or an older version of this one). Your client config and settings are kept; only the attach lines are added.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/main/tt-stats -o /opt/bin/tt-stats
+curl -fsSL https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download/tt-stats -o /opt/bin/tt-stats
 chmod +x /opt/bin/tt-stats
 tt-stats status            # read-only: what is there now
 tt-stats enable --reboot   # switch safely, then reboot once
@@ -357,7 +359,7 @@ Put `killswitch_enabled = true` at the top of `trusttunnel_client.toml`. With `f
 If you prefer manual installation instead of the script:
 
 ```bash
-VERSION="v2.0.0"  # Specify the required version (GitHub Release tag)
+VERSION="v2.0.1"  # Specify the required version (GitHub Release tag)
 
 # Create directories
 mkdir -p /opt/etc/init.d
@@ -366,16 +368,16 @@ mkdir -p /opt/var/run
 mkdir -p /opt/var/log
 
 # Init script
-curl -fsSL "https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/${VERSION}/S99trusttunnel" -o /opt/etc/init.d/S99trusttunnel
+curl -fsSL "https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/${VERSION}/S99trusttunnel" -o /opt/etc/init.d/S99trusttunnel
 chmod +x /opt/etc/init.d/S99trusttunnel
 
 # WAN hook
-curl -fsSL "https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/${VERSION}/010-trusttunnel.sh" -o /opt/etc/ndm/wan.d/010-trusttunnel.sh
+curl -fsSL "https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/${VERSION}/010-trusttunnel.sh" -o /opt/etc/ndm/wan.d/010-trusttunnel.sh
 chmod +x /opt/etc/ndm/wan.d/010-trusttunnel.sh
 
 # Dashboard statistics helper
 mkdir -p /opt/bin
-curl -fsSL "https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/${VERSION}/tt-stats" -o /opt/bin/tt-stats
+curl -fsSL "https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/${VERSION}/tt-stats" -o /opt/bin/tt-stats
 chmod +x /opt/bin/tt-stats
 
 # Ensure the client is executable

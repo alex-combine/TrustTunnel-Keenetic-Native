@@ -18,9 +18,9 @@
 #
 # Log: /opt/var/log/tt-stats.log
 
-TTS_VERSION="2.0.0"
+TTS_VERSION="2.0.1"
 SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
-TTS_REPO_URL="${TTS_REPO_URL:-https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/main}"
+TTS_REPO_URL="${TTS_REPO_URL:-https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download}"
 
 PATH=/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH

@@ -1,6 +1,13 @@
 # Changelog
 
-## v2.0.0 — dashboard statistics (attach mode)
+## v2.0.1 — install statistics via GitHub Releases
+
+- The scripts are attached to every release; `install.sh` and `tt-stats` download them
+  from GitHub Releases, so GitHub counts downloads. Nothing about the router is sent anywhere.
+- Install command: `curl -fsSL https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download/install.sh | sh`
+- Older tags without assets still install from raw files (automatic fallback).
+
+## v2.0.0 — dashboard statistics (attach mode, published as part of v2.0.1)
 
 First release of this extended version, based on
 [TrustTunnel-Keenetic](https://github.com/artemevsevev/TrustTunnel-Keenetic) v1.4.0.

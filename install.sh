@@ -2,7 +2,7 @@
 
 set -e
 
-GITHUB_REPO="alexcombine01-hue/TrustTunnel-Keenetic-Native"
+GITHUB_REPO="alex-combine/TrustTunnel-Keenetic-Native"
 RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}"
 FALLBACK_REF="main"
 
@@ -52,7 +52,15 @@ CONFIGURE_SCRIPT=$(mktemp /tmp/tt_configure.XXXXXX)
 trap "rm -f '$CONFIGURE_SCRIPT'" EXIT
 
 echo "Downloading configuration script..."
-curl -fsSL "$REPO_URL/configure.sh" -o "$CONFIGURE_SCRIPT"
+# Releases carry the scripts as assets (since v2.0.1): GitHub counts their downloads,
+# which is the only install statistics. Nothing about the router is sent anywhere.
+if [ -n "$RELEASE_TAG" ] && [ "$RELEASE_TAG" != "main" ] && \
+   curl -fsSL "https://github.com/${GITHUB_REPO}/releases/download/${RELEASE_TAG}/configure.sh" \
+        -o "$CONFIGURE_SCRIPT" 2>/dev/null; then
+    REPO_URL="https://github.com/${GITHUB_REPO}/releases/download/${RELEASE_TAG}"
+else
+    curl -fsSL "$REPO_URL/configure.sh" -o "$CONFIGURE_SCRIPT"
+fi
 chmod +x "$CONFIGURE_SCRIPT"
 
 REPO_URL="$REPO_URL" sh "$CONFIGURE_SCRIPT"

@@ -15,4 +15,10 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           body_path: CHANGELOG.md
+          files: |
+            install.sh
+            configure.sh
+            S99trusttunnel
+            010-trusttunnel.sh
+            tt-stats
           generate_release_notes: true

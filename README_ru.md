@@ -105,18 +105,20 @@ cd /opt/trusttunnel/
 Выполните одну команду на роутере:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/main/install.sh | sh
+curl -fsSL https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download/install.sh | sh
 ```
+
+> Скрипты скачиваются из выпусков (Releases) GitHub, поэтому GitHub считает скачивания — это единственная статистика использования. Никакие данные о вашем роутере никуда не отправляются.
 
 > Скрипт автоматически определяет последнюю стабильную версию (GitHub Release).
 > Для установки конкретной версии:
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --version v2.0.0
+> curl -fsSL https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --version v2.0.1
 > ```
 
 > Для установки из ветки `main` (последняя dev-версия):
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --dev
+> curl -fsSL https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --dev
 > ```
 
 Скрипт установки выполнит следующее:
@@ -275,7 +277,7 @@ tt-stats status
 Для роутеров, настроенных по оригинальному TrustTunnel-Keenetic (или старой версии этого проекта). Ваш конфиг клиента и настройки сохраняются, добавляются только строки режима attach.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/main/tt-stats -o /opt/bin/tt-stats
+curl -fsSL https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download/tt-stats -o /opt/bin/tt-stats
 chmod +x /opt/bin/tt-stats
 tt-stats status            # только чтение: что сейчас
 tt-stats enable --reboot   # безопасное переключение и одна перезагрузка
@@ -357,7 +359,7 @@ tt-stats disable
 Если вы предпочитаете ручную установку вместо скрипта:
 
 ```bash
-VERSION="v2.0.0"  # Укажите нужную версию (тег GitHub Release)
+VERSION="v2.0.1"  # Укажите нужную версию (тег GitHub Release)
 
 # Создаём директории
 mkdir -p /opt/etc/init.d
@@ -366,16 +368,16 @@ mkdir -p /opt/var/run
 mkdir -p /opt/var/log
 
 # Init-скрипт
-curl -fsSL "https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/${VERSION}/S99trusttunnel" -o /opt/etc/init.d/S99trusttunnel
+curl -fsSL "https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/${VERSION}/S99trusttunnel" -o /opt/etc/init.d/S99trusttunnel
 chmod +x /opt/etc/init.d/S99trusttunnel
 
 # WAN-хук
-curl -fsSL "https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/${VERSION}/010-trusttunnel.sh" -o /opt/etc/ndm/wan.d/010-trusttunnel.sh
+curl -fsSL "https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/${VERSION}/010-trusttunnel.sh" -o /opt/etc/ndm/wan.d/010-trusttunnel.sh
 chmod +x /opt/etc/ndm/wan.d/010-trusttunnel.sh
 
 # Помощник статистики
 mkdir -p /opt/bin
-curl -fsSL "https://raw.githubusercontent.com/alexcombine01-hue/TrustTunnel-Keenetic-Native/${VERSION}/tt-stats" -o /opt/bin/tt-stats
+curl -fsSL "https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/${VERSION}/tt-stats" -o /opt/bin/tt-stats
 chmod +x /opt/bin/tt-stats
 
 # Убедитесь, что клиент исполняемый
