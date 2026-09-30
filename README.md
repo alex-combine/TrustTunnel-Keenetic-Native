@@ -12,6 +12,8 @@
 > Existing installations switch with one command, with automatic rollback if anything goes wrong.
 > Jump to: [Dashboard statistics](#dashboard-statistics-attach-mode) · [Upgrading an existing router](#upgrading-a-router-with-the-classic-setup)
 
+![The TrustTunnel TUN connection in the Keenetic web interface: live traffic graph, current speed and totals](docs/dashboard-stats.png)
+
 ## Prerequisites
 
 Before installing on the router, you must:
