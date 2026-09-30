@@ -18,7 +18,7 @@
 #
 # Log: /opt/var/log/tt-stats.log
 
-TTS_VERSION="2.0.1"
+TTS_VERSION="2.0.2"
 SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 TTS_REPO_URL="${TTS_REPO_URL:-https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download}"
 
@@ -156,7 +156,12 @@ mode_conf_set() {  # $1 = key, $2 = value
 stop_service() {
     "$INIT_SCRIPT" stop >/dev/null 2>&1
     sleep 2
-    pkill -f "S99trusttunnel watchdog" 2>/dev/null
+    # firmware builds without pkill: fall back to ps + kill
+    if command -v pkill >/dev/null 2>&1; then
+        pkill -f "S99trusttunnel watchdog" 2>/dev/null
+    else
+        for p in $(ps w | grep "[S]99trusttunnel watchdog" | awk '{print $1}'); do kill "$p" 2>/dev/null; done
+    fi
     for p in $(pidof trusttunnel_client); do kill "$p" 2>/dev/null; done
     sleep 2
     for p in $(pidof trusttunnel_client); do kill -9 "$p" 2>/dev/null; done

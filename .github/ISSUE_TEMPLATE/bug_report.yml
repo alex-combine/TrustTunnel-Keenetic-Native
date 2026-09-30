@@ -1,0 +1,56 @@
+name: Bug report / Сообщить об ошибке
+description: Something does not work / Что-то не работает
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not post your server address, credentials or `config.toml`.
+        Не публикуйте адрес сервера, логины, пароли и `config.toml`.
+  - type: input
+    id: router
+    attributes:
+      label: Router model / Модель роутера
+      placeholder: Keenetic Hero 4G (KN-2310)
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: KeeneticOS version / Версия KeeneticOS
+      placeholder: "5.1.6"
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: TrustTunnel client version / Версия клиента
+      description: "/opt/trusttunnel_client/trusttunnel_client --version"
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode / Режим
+      options:
+        - TUN — attach (tt-stats enable)
+        - TUN — classic
+        - SOCKS5
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened / Что случилось
+      description: Steps, what you expected and what you got / Шаги, что ожидали и что получили
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: "Output of `tt-stats status` and `/opt/etc/init.d/S99trusttunnel status` / Вывод этих команд"
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: Log / Журнал
+      description: "tail -n 50 /opt/var/log/trusttunnel.log — remove addresses / уберите адреса"
+      render: text

@@ -169,11 +169,13 @@ check_connectivity() {
         fi
         curl --interface "$OPKG_IFACE" \
              --connect-timeout "$HC_CURL_TIMEOUT" \
+             --max-time "$((HC_CURL_TIMEOUT * 3))" \
              -s -o /dev/null \
              "$HC_TARGET_URL" >/dev/null 2>&1
     else
         curl --socks5 "$HC_SOCKS5_PROXY" \
              --connect-timeout "$HC_CURL_TIMEOUT" \
+             --max-time "$((HC_CURL_TIMEOUT * 3))" \
              -s -o /dev/null \
              "$HC_TARGET_URL" >/dev/null 2>&1
     fi
@@ -339,7 +341,12 @@ stop_watchdog() {
         rm -f "$WATCHDOG_PID_FILE"
     fi
 
-    pkill -f "/opt/etc/init.d/S99trusttunnel watchdog" 2>/dev/null
+    # firmware builds without pkill: fall back to ps + kill
+    if command -v pkill >/dev/null 2>&1; then
+        pkill -f "/opt/etc/init.d/S99trusttunnel watchdog" 2>/dev/null
+    else
+        for p in $(ps w | grep "[S]99trusttunnel watchdog" | awk '{print $1}'); do kill "$p" 2>/dev/null; done
+    fi
 }
 
 start() {

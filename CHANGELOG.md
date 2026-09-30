@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.0.2 — reliability fixes
+
+- `S99trusttunnel`: the health check now has a total time limit (`--max-time`, 3 × `HC_CURL_TIMEOUT`).
+  Before, only the connect time was limited: if the tunnel hung after connecting, `curl` could wait
+  forever, and the watchdog stopped checking the tunnel and restarting the client.
+- `S99trusttunnel`, `tt-stats`: stopping the watchdog works on firmware without `pkill`
+  (fallback to `ps` + `kill`).
+- README: troubleshooting for `Connection reset by peer` while downloading from GitHub; release and download badges.
+- Issue template for bug reports.
+
 ## v2.0.1 — install statistics via GitHub Releases
 
 - The scripts are attached to every release; `install.sh` and `tt-stats` download them

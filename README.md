@@ -1,5 +1,9 @@
 # TrustTunnel on Keenetic routers — with dashboard statistics
 
+[![Release](https://img.shields.io/github/v/release/alex-combine/TrustTunnel-Keenetic-Native)](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/alex-combine/TrustTunnel-Keenetic-Native/total)](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases)
+[![License](https://img.shields.io/github/license/alex-combine/TrustTunnel-Keenetic-Native)](LICENSE)
+
 [🇷🇺 Инструкция на русском языке](README_ru.md)
 
 > An extended version of [TrustTunnel-Keenetic](https://github.com/artemevsevev/TrustTunnel-Keenetic) by Artem Evsevev.
@@ -113,7 +117,7 @@ curl -fsSL https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/
 > The script automatically detects the latest stable version (GitHub Release).
 > To install a specific version:
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --version v2.0.1
+> curl -fsSL https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --version v2.0.2
 > ```
 
 > To install from the `main` branch (latest dev version):
@@ -359,7 +363,7 @@ Put `killswitch_enabled = true` at the top of `trusttunnel_client.toml`. With `f
 If you prefer manual installation instead of the script:
 
 ```bash
-VERSION="v2.0.1"  # Specify the required version (GitHub Release tag)
+VERSION="v2.0.2"  # Specify the required version (GitHub Release tag)
 
 # Create directories
 mkdir -p /opt/etc/init.d
@@ -503,6 +507,14 @@ mv /opt/etc/init.d/S99trusttunnel /opt/etc/init.d/_S99trusttunnel
 ```
 
 ## Troubleshooting
+
+### Download fails: `Connection reset by peer`
+
+If the install command stops with `curl: (35) Recv failure: Connection reset by peer` (or a timeout), your provider interrupts connections to GitHub. The router itself is fine. What you can do:
+
+1. Run the command again a few times — the resets are often intermittent.
+2. Download the release files on a computer from the [Releases](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest) page (`install.sh`, `configure.sh`, `S99trusttunnel`, `010-trusttunnel.sh`, `tt-stats`), copy them to the router (for example with WinSCP or `scp` into `/opt/tmp/`) and follow [Manual Installation](#manual-installation).
+3. If the router already has a working VPN connection, send `github.com` and `githubusercontent.com` through it (Routing → DNS routes in the Keenetic web interface) and run the command again.
 
 ### Client doesn't start
 ```bash

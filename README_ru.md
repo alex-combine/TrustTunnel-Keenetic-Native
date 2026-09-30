@@ -1,5 +1,9 @@
 # TrustTunnel на роутерах Keenetic — со статистикой в веб-интерфейсе
 
+[![Release](https://img.shields.io/github/v/release/alex-combine/TrustTunnel-Keenetic-Native)](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/alex-combine/TrustTunnel-Keenetic-Native/total)](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases)
+[![License](https://img.shields.io/github/license/alex-combine/TrustTunnel-Keenetic-Native)](LICENSE)
+
 [🇺🇸 Read this in English](README.md)
 
 > Расширенная версия проекта [TrustTunnel-Keenetic](https://github.com/artemevsevev/TrustTunnel-Keenetic) (автор — Artem Evsevev).
@@ -113,7 +117,7 @@ curl -fsSL https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/
 > Скрипт автоматически определяет последнюю стабильную версию (GitHub Release).
 > Для установки конкретной версии:
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --version v2.0.1
+> curl -fsSL https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --version v2.0.2
 > ```
 
 > Для установки из ветки `main` (последняя dev-версия):
@@ -359,7 +363,7 @@ tt-stats disable
 Если вы предпочитаете ручную установку вместо скрипта:
 
 ```bash
-VERSION="v2.0.1"  # Укажите нужную версию (тег GitHub Release)
+VERSION="v2.0.2"  # Укажите нужную версию (тег GitHub Release)
 
 # Создаём директории
 mkdir -p /opt/etc/init.d
@@ -503,6 +507,14 @@ mv /opt/etc/init.d/S99trusttunnel /opt/etc/init.d/_S99trusttunnel
 ```
 
 ## Troubleshooting
+
+### Загрузка обрывается: `Connection reset by peer`
+
+Если команда установки падает с `curl: (35) Recv failure: Connection reset by peer` (или по таймауту), значит провайдер обрывает соединения с GitHub. С роутером всё в порядке. Что можно сделать:
+
+1. Повторить команду несколько раз — обрывы часто бывают не каждый раз.
+2. Скачать файлы релиза на компьютере со страницы [Releases](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest) (`install.sh`, `configure.sh`, `S99trusttunnel`, `010-trusttunnel.sh`, `tt-stats`), скопировать их на роутер (например, WinSCP или `scp` в `/opt/tmp/`) и выполнить [ручную установку](#ручная-установка).
+3. Если на роутере уже есть работающее VPN-подключение — направить через него `github.com` и `githubusercontent.com` (Маршрутизация → DNS-маршруты в веб-интерфейсе Keenetic) и повторить команду.
 
 ### Клиент не запускается
 ```bash
