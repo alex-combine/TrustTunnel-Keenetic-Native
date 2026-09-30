@@ -15,10 +15,13 @@
 #   disable            return to the classic mode from the backup
 #   reboot             run pre-flight checks and reboot the router
 #   guard              boot check (called by /opt/etc/init.d/S99ttstats-guard)
+#   memguard on [KB]|off|status
+#                      memory guard for 128 MB routers: restart the client when free
+#                      memory drops below KB (default 10000) instead of letting the router hang
 #
-# Log: /opt/var/log/tt-stats.log
+# Log: /opt/var/log/tt-stats.log, memory guard: /opt/var/log/tt-memguard.log
 
-TTS_VERSION="2.0.2"
+TTS_VERSION="2.1.0"
 SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 TTS_REPO_URL="${TTS_REPO_URL:-https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download}"
 
@@ -38,6 +41,12 @@ BACKUP_DIR="$TT_DIR/backup-classic"
 LOG="/opt/var/log/tt-stats.log"
 DONE_FLAG="/tmp/tt-stats.done"
 MIN_CLIENT_VERSION="1.0.62"
+MEMGUARD_INIT="${MEMGUARD_INIT:-/opt/etc/init.d/S97tt-memguard}"
+MEMGUARD_PID="${MEMGUARD_PID:-/opt/var/run/tt-memguard.pid}"
+MEMGUARD_LOG="${MEMGUARD_LOG:-/opt/var/log/tt-memguard.log}"
+MEMGUARD_PAUSE="/tmp/tt-memguard.pause"
+MEMGUARD_HIST="/tmp/tt-memguard.hist"
+MG_TARGET="${MG_TARGET:-/opt/etc/init.d/S99trusttunnel}"   # what the guard restarts (overridable for tests)
 
 TT_MODE="socks5"
 TUN_IDX="0"
@@ -46,6 +55,7 @@ HC_TARGET_URL="http://connectivitycheck.gstatic.com/generate_204"
 # shellcheck source=/dev/null
 [ -f "$MODE_CONF" ] && . "$MODE_CONF"
 TUN_IDX="${TUN_IDX:-0}"
+MEMGUARD_LOW_KB="${MEMGUARD_LOW_KB:-10000}"
 OPKG_IFACE="opkgtun${TUN_IDX}"
 NDM_IFACE="OpkgTun${TUN_IDX}"
 
@@ -215,7 +225,99 @@ cmd_status() {
     fi
     [ -f "$BACKUP_DIR/MD5SUMS" ] && echo "Classic backup:       $BACKUP_DIR"
     [ -x "$GUARD_SCRIPT" ] && echo "Boot guard:           installed"
+    if [ -x "$MEMGUARD_INIT" ]; then mg_running && m="on, running" || m="on, NOT running"; else m="off (tt-stats memguard on)"; fi
+    echo "Memory guard:         $m; free memory $(mem_avail) kB"
     return 0
+}
+
+# ---------------------------------------------------------- memory guard ---
+# On routers with 128 MB of RAM a long fast download through the tunnel can exhaust
+# memory (the client buffers faster than the CPU encrypts) and the router hangs.
+# The guard restarts only the client (frees its buffers); 3 times in 10 minutes ->
+# the VPN pauses for 15 minutes and starts again. A short outage beats a hung router.
+
+mem_avail() { awk '/MemAvailable/ {print $2; exit}' /proc/meminfo; }
+client_rss() { p=$(pidof trusttunnel_client | cut -d' ' -f1); [ -n "$p" ] && awk '/VmRSS/ {print $2}' "/proc/$p/status"; }
+mg_running() { p=$(cat "$MEMGUARD_PID" 2>/dev/null); [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+mlog() { mkdir -p "$(dirname "$MEMGUARD_LOG")"; echo "$(ts) $*" >> "$MEMGUARD_LOG"; logger -t tt-memguard "$*" 2>/dev/null; }
+
+mg_start() {
+    mg_running && return 0
+    if command -v start-stop-daemon >/dev/null 2>&1; then
+        start-stop-daemon -S -b -x "$SELF" -- memguard-run
+    else
+        ( "$SELF" memguard-run ) </dev/null >/dev/null 2>&1 &
+    fi
+    sleep 1
+}
+
+mg_stop() {
+    p=$(cat "$MEMGUARD_PID" 2>/dev/null)
+    [ -n "$p" ] && kill "$p" 2>/dev/null
+    rm -f "$MEMGUARD_PID"
+}
+
+cmd_memguard_run() {
+    echo $$ > "$MEMGUARD_PID"
+    trap 'rm -f "$MEMGUARD_PID"; exit 0' TERM INT
+    mlog "started: threshold ${MEMGUARD_LOW_KB} kB, now free $(mem_avail) kB"
+    while true; do
+        a=$(mem_avail)
+        if [ "${a:-999999}" -lt "$MEMGUARD_LOW_KB" ] && [ ! -f "$MEMGUARD_PAUSE" ]; then
+            now=$(date +%s)
+            { awk -v n="$now" 'n-$1<600' "$MEMGUARD_HIST" 2>/dev/null; echo "$now"; } > "$MEMGUARD_HIST.new"
+            mv "$MEMGUARD_HIST.new" "$MEMGUARD_HIST"
+            recent=$(wc -l < "$MEMGUARD_HIST")
+            if [ "$recent" -ge 3 ]; then
+                mlog "PAUSE the VPN for 15 minutes: free ${a} kB, client $(client_rss) kB, ${recent} times in 10 minutes"
+                touch "$MEMGUARD_PAUSE"; "$MG_TARGET" stop >/dev/null 2>&1
+                ( sleep 900; rm -f "$MEMGUARD_PAUSE"; "$MG_TARGET" start >/dev/null 2>&1 ) </dev/null >/dev/null 2>&1 &
+            else
+                mlog "restarting the client: free ${a} kB, client $(client_rss) kB (${recent} in 10 minutes)"
+                "$MG_TARGET" reload >/dev/null 2>&1
+            fi
+            sleep 60
+        fi
+        sleep 5
+    done
+}
+
+cmd_memguard() {  # $1 = on|off|status, $2 = threshold kB (optional, with on)
+    case "$1" in
+        on)
+            [ -n "$(mem_avail)" ] || die "this firmware does not report MemAvailable in /proc/meminfo"
+            if [ -n "$2" ]; then
+                case "$2" in *[!0-9]*) die "threshold must be a number of kB, e.g. 10000" ;; esac
+                mode_conf_set MEMGUARD_LOW_KB "$2"; MEMGUARD_LOW_KB="$2"
+            fi
+            mkdir -p "$(dirname "$MEMGUARD_INIT")" "$(dirname "$MEMGUARD_PID")"
+            cat > "$MEMGUARD_INIT" <<EOF
+#!/bin/sh
+# tt-stats memory guard: restarts the TrustTunnel client when free memory runs out,
+# instead of letting a 128 MB router hang. Managed by: tt-stats memguard on|off
+case "\$1" in
+    start|restart) $SELF memguard-start ;;
+    stop)          $SELF memguard-stop ;;
+esac
+exit 0
+EOF
+            chmod +x "$MEMGUARD_INIT"
+            mg_stop; mg_start
+            mg_running && say "Memory guard is on: threshold ${MEMGUARD_LOW_KB} kB (now free $(mem_avail) kB). Log: $MEMGUARD_LOG" \
+                       || die "memory guard did not start, see $MEMGUARD_LOG"
+            ;;
+        off)
+            mg_stop; rm -f "$MEMGUARD_INIT" "$MEMGUARD_PAUSE"
+            say "Memory guard is off"
+            ;;
+        *)
+            if [ -x "$MEMGUARD_INIT" ]; then echo "Memory guard: on (threshold ${MEMGUARD_LOW_KB} kB)$(mg_running && echo ', running' || echo ', NOT running')"
+            else echo "Memory guard: off — enable: tt-stats memguard on"; fi
+            echo "Free memory:  $(mem_avail) kB; client: $(client_rss) kB"
+            [ -f "$MEMGUARD_PAUSE" ] && echo "VPN is paused by the guard (starts again within 15 minutes)"
+            [ -f "$MEMGUARD_LOG" ] && { echo "Last events:"; tail -n 5 "$MEMGUARD_LOG"; }
+            ;;
+    esac
 }
 
 cmd_disable() {  # $1 = reason
@@ -371,6 +473,10 @@ case "$1" in
     disable)   cmd_disable "${2:-manual}" ;;
     reboot)    cmd_reboot ;;
     guard)     cmd_guard ;;
+    memguard)  cmd_memguard "$2" "$3" ;;
+    memguard-run)   cmd_memguard_run ;;
+    memguard-start) mg_start ;;
+    memguard-stop)  mg_stop ;;
     version)   echo "$TTS_VERSION" ;;
-    *) echo "Usage: tt-stats {status|enable [--reboot]|disable|reboot|version}"; exit 1 ;;
+    *) echo "Usage: tt-stats {status|enable [--reboot]|disable|reboot|memguard [on [KB]|off]|version}"; exit 1 ;;
 esac

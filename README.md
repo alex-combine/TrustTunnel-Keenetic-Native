@@ -319,6 +319,19 @@ All actions are logged to `/opt/var/log/tt-stats.log`.
 
 Put `killswitch_enabled = true` at the top of `trusttunnel_client.toml`. With `false`, when the VPN server is unreachable, the client may let traffic go directly through the ISP. This setting is independent of attach mode, but worth checking while you are here — `tt-stats status` shows it.
 
+### Optional: memory guard (routers with 128 MB)
+
+On routers with 128 MB of RAM a long fast download through the tunnel can exhaust memory, and the router hangs (see [troubleshooting](#the-router-hangs-or-reboots-during-big-downloads-through-the-vpn)). The memory guard prevents that:
+
+```bash
+tt-stats memguard on          # enable (threshold 10000 kB of free memory)
+tt-stats memguard on 15000    # enable with your own threshold, kB
+tt-stats memguard             # state, free memory, last events
+tt-stats memguard off         # disable
+```
+
+Every 5 seconds the guard checks free memory (`MemAvailable`). Below the threshold it restarts only the TrustTunnel client: that frees the client's buffers, the tunnel reconnects in a few seconds. If this happens 3 times within 10 minutes, it stops the VPN for 15 minutes and then starts it again — a short outage is better than a hung router. With a kill switch, devices that may use only the VPN have no internet during the pause. Autostart: `/opt/etc/init.d/S97tt-memguard`, log: `/opt/var/log/tt-memguard.log`.
+
 ### FAQ
 
 - **Does attach mode change routing, policies or the firewall?** No. KeeneticOS routes through `OpkgTunN` in both modes; only who creates the device changes.
@@ -337,7 +350,8 @@ Put `killswitch_enabled = true` at the top of `trusttunnel_client.toml`. With `f
 ├── etc/
 │   ├── init.d/
 │   │   ├── S99trusttunnel          # Main init script
-│   │   └── S99ttstats-guard        # Boot guard (created by tt-stats enable)
+│   │   ├── S99ttstats-guard        # Boot guard (created by tt-stats enable)
+│   │   └── S97tt-memguard          # Memory guard (created by tt-stats memguard on)
 │   └── ndm/
 │       └── wan.d/
 │           └── 010-trusttunnel.sh  # Hook on WAN up
@@ -507,6 +521,16 @@ mv /opt/etc/init.d/S99trusttunnel /opt/etc/init.d/_S99trusttunnel
 ```
 
 ## Troubleshooting
+
+### The router hangs or reboots during big downloads through the VPN
+
+On routers with 128 MB of RAM (for example MIPS models like Keenetic Hero 4G) a long fast download through the tunnel — a Steam or game update, a torrent — can exhaust memory: the client buffers traffic faster than the CPU encrypts it. The web interface stops responding, the router may reboot, and if the download resumes after the reboot, everything repeats.
+
+What helps:
+1. **Send big downloads past the VPN** — they rarely need it. For devices without a connection policy: Routing → DNS routes in the Keenetic web interface (for example `steamcontent.com` through your ISP connection).
+2. **Limit the download speed** in the program itself (Steam: Settings → Downloads).
+3. **Turn on the memory guard:** `tt-stats memguard on` — see [Memory guard](#optional-memory-guard-routers-with-128-mb).
+4. Check the memory: `grep MemAvailable /proc/meminfo` — below about 10 MB the router is at risk.
 
 ### Download fails: `Connection reset by peer`
 

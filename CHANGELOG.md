@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.1.0 — memory guard for 128 MB routers
+
+- `tt-stats memguard on [KB]|off|status`: optional memory guard (`/opt/etc/init.d/S97tt-memguard`).
+  When free memory (`MemAvailable`) drops below the threshold (default 10000 kB), it restarts only
+  the client, which frees its buffers; 3 times in 10 minutes pauses the VPN for 15 minutes.
+  Found on a real router: a long Steam download through the tunnel exhausted 128 MB and the router
+  hung and rebooted in a loop. Log: `/opt/var/log/tt-memguard.log`.
+- `tt-stats status` shows the memory guard state and free memory.
+- README: troubleshooting for routers that hang during big downloads through the VPN.
+
 ## v2.0.2 — reliability fixes
 
 - `S99trusttunnel`: the health check now has a total time limit (`--max-time`, 3 × `HC_CURL_TIMEOUT`).
