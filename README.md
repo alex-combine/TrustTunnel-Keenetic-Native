@@ -316,6 +316,7 @@ All actions are logged to `/opt/var/log/tt-stats.log`.
 | `tt-stats disable` | Restore the classic setup from the backup |
 | `tt-stats reboot` | Pre-flight checks, then router reboot |
 | `tt-stats version` | Helper version |
+| `tt-stats update-check` | Is a newer release out? (reads only the version number) |
 
 ### Recommended: kill switch
 
@@ -333,6 +334,18 @@ tt-stats memguard off         # disable
 ```
 
 Every 5 seconds the guard checks free memory (`MemAvailable`). Below the threshold it restarts only the TrustTunnel client: that frees the client's buffers, the tunnel reconnects in a few seconds. If this happens 3 times within 10 minutes, it stops the VPN for 15 minutes and then starts it again — a short outage is better than a hung router. With a kill switch, devices that may use only the VPN have no internet during the pause. Autostart: `/opt/etc/init.d/S97tt-memguard`, log: `/opt/var/log/tt-memguard.log`.
+
+### Update notifications
+
+The router tells you when a new release is out — it never updates itself:
+
+- `tt-stats status` shows an `Updates:` line (checked at most once a day);
+- once a day (Entware cron, `/opt/etc/cron.daily/tt-stats-update-check`) a note goes to the router's **system log**, once per new version;
+- releases with a serious fix are marked **IMPORTANT** (the minimum safe version is in [`MIN_VERSION`](MIN_VERSION)).
+
+The check reads only the version number from GitHub: it downloads nothing, runs nothing and sends nothing about your router. To upgrade, re-run the installer (the VPN restarts for 5–10 seconds). To turn the daily check off: `tt-stats update-check --remove-cron`.
+
+Prefer e-mail? On the GitHub page click **Watch → Custom → Releases**.
 
 ### FAQ
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.2.0 — update notifications
+
+- The router now tells you when a new release is out (it never updates itself):
+  `tt-stats status` shows an `Updates:` line, and a daily check (`/opt/etc/cron.daily/tt-stats-update-check`,
+  installed by the installer when Entware cron is present) writes a note to the router's system log,
+  once per new version. `tt-stats update-check` checks by hand.
+- `MIN_VERSION` in the repository: installations older than it get an **IMPORTANT** note (serious fixes).
+- The check reads only the version number (the redirect of `releases/latest`, not followed, plus `MIN_VERSION`);
+  it downloads, runs and sends nothing. Only digits and dots are accepted from the answer.
+- Memory guard: like the init script in v2.1.1, it no longer trusts a stale PID file after a crash
+  (it would not start exactly when it is needed).
+
 ## v2.1.1 — VPN starts reliably after a crash
 
 - `S99trusttunnel`: after a crash or power loss the old PID files stay on the USB drive. If one of those

@@ -21,6 +21,7 @@ cleanup_on_error() {
         echo "  rm -f /opt/etc/ndm/wan.d/010-trusttunnel.sh"
         echo "  rm -f /opt/trusttunnel_client/mode.conf"
         echo "  rm -f /opt/bin/tt-stats"
+        echo "  rm -f /opt/etc/cron.daily/tt-stats-update-check"
     fi
 }
 trap cleanup_on_error EXIT
@@ -191,6 +192,7 @@ mkdir -p /opt/bin
 curl -fsSL "$REPO_URL/tt-stats" -o /opt/bin/tt-stats
 sed -i "s|^TTS_REPO_URL=.*|TTS_REPO_URL=\"\${TTS_REPO_URL:-$REPO_URL}\"|" /opt/bin/tt-stats
 chmod +x /opt/bin/tt-stats
+/opt/bin/tt-stats update-check --install-cron || true   # daily "update available" note (reads only the version number)
 
 # === Write mode.conf ===
 echo "Saving mode to /opt/trusttunnel_client/mode.conf..."

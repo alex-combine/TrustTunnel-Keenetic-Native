@@ -18,10 +18,12 @@
 #   memguard on [KB]|off|status
 #                      memory guard for 128 MB routers: restart the client when free
 #                      memory drops below KB (default 10000) instead of letting the router hang
+#   update-check       is a newer release out? Reads only the version number, downloads and
+#                      changes nothing. A daily check is installed in /opt/etc/cron.daily
 #
 # Log: /opt/var/log/tt-stats.log, memory guard: /opt/var/log/tt-memguard.log
 
-TTS_VERSION="2.1.1"
+TTS_VERSION="2.2.0"
 SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 TTS_REPO_URL="${TTS_REPO_URL:-https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download}"
 
@@ -41,6 +43,12 @@ BACKUP_DIR="$TT_DIR/backup-classic"
 LOG="/opt/var/log/tt-stats.log"
 DONE_FLAG="/tmp/tt-stats.done"
 MIN_CLIENT_VERSION="1.0.62"
+TTS_GH_REPO="alex-combine/TrustTunnel-Keenetic-Native"
+TTS_LATEST_URL="${TTS_LATEST_URL:-https://github.com/$TTS_GH_REPO/releases/latest}"
+TTS_MIN_URL="${TTS_MIN_URL:-https://raw.githubusercontent.com/$TTS_GH_REPO/main/MIN_VERSION}"
+UPD_CACHE="/tmp/tt-stats.update"                      # last check result (RAM, refreshed daily)
+UPD_NOTIFIED="/opt/var/run/tt-stats.notified"         # last version written to the router log
+UPD_CRON="${TTS_UPD_CRON:-/opt/etc/cron.daily/tt-stats-update-check}"
 MEMGUARD_INIT="${MEMGUARD_INIT:-/opt/etc/init.d/S97tt-memguard}"
 MEMGUARD_PID="${MEMGUARD_PID:-/opt/var/run/tt-memguard.pid}"
 MEMGUARD_LOG="${MEMGUARD_LOG:-/opt/var/log/tt-memguard.log}"
@@ -227,7 +235,75 @@ cmd_status() {
     [ -x "$GUARD_SCRIPT" ] && echo "Boot guard:           installed"
     if [ -x "$MEMGUARD_INIT" ]; then mg_running && m="on, running" || m="on, NOT running"; else m="off (tt-stats memguard on)"; fi
     echo "Memory guard:         $m; free memory $(mem_avail) kB"
+    echo "Updates:              $(upd_status_line)"
     return 0
+}
+
+# ---------------------------------------------------------- update check ---
+# Tells the user that a newer release is out. Reads only the version number:
+#  - latest release: the redirect of releases/latest (HEAD, not followed) -> .../tag/vX.Y.Z
+#    (downloads nothing, so it does not count as a download);
+#  - MIN_VERSION in the repository: older installations get an IMPORTANT note (serious fixes).
+# Never downloads or runs anything. Upgrading stays manual: re-run install.sh.
+
+is_ver() { echo "$1" | grep -qE '^[0-9]+(\.[0-9]+){0,3}$'; }   # only digits and dots get through
+
+upd_latest() {
+    loc=$(curl -sI -m 5 "$TTS_LATEST_URL" 2>/dev/null | tr -d '\r' | awk 'tolower($1)=="location:" {print $2; exit}')
+    v="${loc##*/tag/v}"; is_ver "$v" && echo "$v"
+}
+
+upd_min() {
+    v=$(curl -sf -m 5 "$TTS_MIN_URL" 2>/dev/null | head -n 1 | tr -d '\r \t')
+    is_ver "$v" && echo "$v"
+}
+
+upd_message() {  # $1 = latest, $2 = yes if important
+    m="update available: tt-stats $TTS_VERSION -> $1"
+    [ "$2" = yes ] && m="IMPORTANT $m (fixes a serious bug, see CHANGELOG)"
+    echo "$m. To upgrade, re-run install.sh (the VPN restarts for 5-10 s). https://github.com/$TTS_GH_REPO/releases"
+}
+
+cmd_update_check() {  # $1 = --quiet | --install-cron | --remove-cron
+    case "$1" in
+        --install-cron)
+            [ -d "$(dirname "$UPD_CRON")" ] || { echo "No $(dirname "$UPD_CRON") (Entware cron) - daily check not installed; tt-stats status still checks."; return 0; }
+            cat > "$UPD_CRON" <<'EOF'
+#!/bin/sh
+# tt-stats: once a day, check whether a newer release is out (reads only the version number,
+# downloads and changes nothing). Remove this file to turn the check off.
+( sleep "$(awk 'BEGIN { srand(); print int(rand() * 1800) }')"; /opt/bin/tt-stats update-check --quiet ) </dev/null >/dev/null 2>&1 &
+EOF
+            chmod +x "$UPD_CRON"; echo "Daily update check installed: $UPD_CRON"; return 0 ;;
+        --remove-cron) rm -f "$UPD_CRON"; echo "Daily update check removed."; return 0 ;;
+    esac
+    lv=$(upd_latest)
+    if [ -z "$lv" ]; then [ "$1" = --quiet ] || echo "Could not reach GitHub - try later."; return 0; fi
+    mv_=$(upd_min); imp=no
+    [ -n "$mv_" ] && ! version_ge "$TTS_VERSION" "$mv_" && imp=yes
+    if version_ge "$TTS_VERSION" "$lv"; then st=current; else st=available; fi
+    echo "$(date +%s) $lv $imp $st" > "$UPD_CACHE"
+    if [ "$st" = available ]; then
+        msg=$(upd_message "$lv" "$imp")
+        if [ "$(cat "$UPD_NOTIFIED" 2>/dev/null)" != "$lv" ]; then   # router log: once per new version
+            logger -t tt-stats "$msg" 2>/dev/null; echo "$(ts) $msg" >> "$LOG"
+            mkdir -p "$(dirname "$UPD_NOTIFIED")"; echo "$lv" > "$UPD_NOTIFIED"
+        fi
+        [ "$1" = --quiet ] || echo "$msg"
+    else
+        [ "$1" = --quiet ] || echo "tt-stats $TTS_VERSION is the latest release."
+    fi
+}
+
+upd_status_line() {  # uses the cached result; checks again if it is older than a day
+    set -- $(cat "$UPD_CACHE" 2>/dev/null)
+    if [ -z "$1" ] || [ $(( $(date +%s) - $1 )) -gt 86400 ]; then
+        cmd_update_check --quiet; set -- $(cat "$UPD_CACHE" 2>/dev/null)
+    fi
+    if [ -z "$2" ]; then echo "unknown (GitHub not reachable)"
+    elif [ "$4" = available ] && [ "$3" = yes ]; then echo "IMPORTANT update $2 - re-run install.sh"
+    elif [ "$4" = available ]; then echo "$2 available - re-run install.sh"
+    else echo "up to date"; fi
 }
 
 # ---------------------------------------------------------- memory guard ---
@@ -238,7 +314,9 @@ cmd_status() {
 
 mem_avail() { awk '/MemAvailable/ {print $2; exit}' /proc/meminfo; }
 client_rss() { p=$(pidof trusttunnel_client | cut -d' ' -f1); [ -n "$p" ] && awk '/VmRSS/ {print $2}' "/proc/$p/status"; }
-mg_running() { p=$(cat "$MEMGUARD_PID" 2>/dev/null); [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+# The PID file survives a crash on the USB drive; after a reboot that PID may belong to another
+# process, so check the command line, not just that the PID exists.
+mg_running() { p=$(cat "$MEMGUARD_PID" 2>/dev/null); [ -n "$p" ] && grep -q memguard-run "/proc/$p/cmdline" 2>/dev/null; }
 mlog() { mkdir -p "$(dirname "$MEMGUARD_LOG")"; echo "$(ts) $*" >> "$MEMGUARD_LOG"; logger -t tt-memguard "$*" 2>/dev/null; }
 
 mg_start() {
@@ -252,8 +330,7 @@ mg_start() {
 }
 
 mg_stop() {
-    p=$(cat "$MEMGUARD_PID" 2>/dev/null)
-    [ -n "$p" ] && kill "$p" 2>/dev/null
+    mg_running && kill "$(cat "$MEMGUARD_PID")" 2>/dev/null
     rm -f "$MEMGUARD_PID"
 }
 
@@ -478,5 +555,6 @@ case "$1" in
     memguard-start) mg_start ;;
     memguard-stop)  mg_stop ;;
     version)   echo "$TTS_VERSION" ;;
+    update-check) cmd_update_check "$2" ;;
     *) echo "Usage: tt-stats {status|enable [--reboot]|disable|reboot|memguard [on [KB]|off]|version}"; exit 1 ;;
 esac
