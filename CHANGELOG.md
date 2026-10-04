@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.1.1 — VPN starts reliably after a crash
+
+- `S99trusttunnel`: after a crash or power loss the old PID files stay on the USB drive. If one of those
+  PIDs belonged to another process after the reboot, the script thought the client or the watchdog was
+  "already running" and did not start the VPN at all. Now it checks the process command line
+  (`/proc/PID/cmdline`), not just that the PID exists. Found on a real router after a hang.
+
 ## v2.1.0 — memory guard for 128 MB routers
 
 - `tt-stats memguard on [KB]|off|status`: optional memory guard (`/opt/etc/init.d/S97tt-memguard`).

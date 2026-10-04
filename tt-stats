@@ -21,7 +21,7 @@
 #
 # Log: /opt/var/log/tt-stats.log, memory guard: /opt/var/log/tt-memguard.log
 
-TTS_VERSION="2.1.0"
+TTS_VERSION="2.1.1"
 SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 TTS_REPO_URL="${TTS_REPO_URL:-https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download}"
 

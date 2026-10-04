@@ -181,10 +181,15 @@ check_connectivity() {
     fi
 }
 
+# Is process $1 alive AND is it ours ($2 in its command line)? After a crash or power loss
+# the old PID file survives on the USB drive, and that PID may now belong to another process.
+# "kill -0" alone would then report "already running" and the VPN would not start.
+pid_is() { [ -n "$1" ] && grep -q "$2" "/proc/$1/cmdline" 2>/dev/null; }
+
 get_pid() {
     if [ -f "$PID_FILE" ]; then
         pid=$(cat "$PID_FILE" 2>/dev/null)
-        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        if pid_is "$pid" "$PROCS"; then
             echo "$pid"
             return 0
         fi
@@ -333,7 +338,7 @@ start_client() {
 stop_watchdog() {
     if [ -f "$WATCHDOG_PID_FILE" ]; then
         wpid=$(cat "$WATCHDOG_PID_FILE" 2>/dev/null)
-        if [ -n "$wpid" ] && kill -0 "$wpid" 2>/dev/null; then
+        if pid_is "$wpid" watchdog; then
             kill "$wpid" 2>/dev/null
             sleep 1
             kill -9 "$wpid" 2>/dev/null
@@ -354,7 +359,7 @@ start() {
 
     if [ -f "$WATCHDOG_PID_FILE" ]; then
         wpid=$(cat "$WATCHDOG_PID_FILE" 2>/dev/null)
-        if [ -n "$wpid" ] && kill -0 "$wpid" 2>/dev/null; then
+        if pid_is "$wpid" watchdog; then
             log_info "$DESC watchdog is already running"
             return 1
         fi
@@ -414,7 +419,7 @@ reload() {
     watchdog_alive=false
     if [ -f "$WATCHDOG_PID_FILE" ]; then
         wpid=$(cat "$WATCHDOG_PID_FILE" 2>/dev/null)
-        if [ -n "$wpid" ] && kill -0 "$wpid" 2>/dev/null; then
+        if pid_is "$wpid" watchdog; then
             watchdog_alive=true
         fi
     fi
@@ -443,7 +448,7 @@ status() {
 
         if [ -f "$WATCHDOG_PID_FILE" ]; then
             wpid=$(cat "$WATCHDOG_PID_FILE" 2>/dev/null)
-            if [ -n "$wpid" ] && kill -0 "$wpid" 2>/dev/null; then
+            if pid_is "$wpid" watchdog; then
                 echo "Watchdog is running (PID: $wpid)"
             else
                 echo "Watchdog is NOT running"
