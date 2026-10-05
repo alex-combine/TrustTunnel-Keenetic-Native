@@ -51,7 +51,7 @@ install.sh → downloads → configure.sh → installs → S99trusttunnel + 010-
 
 ## Release Process
 
-Push a tag matching `v*` (e.g., `v1.0.0`) to trigger the GitHub Actions workflow (`.github/workflows/release.yml`) which creates a GitHub Release with auto-generated notes via `softprops/action-gh-release@v2`.
+Add a `## vX.Y.Z — title` section at the top of `CHANGELOG.md`, bump `TTS_VERSION` in `tt-stats`, then push a tag matching `v*` (e.g., `v2.2.1`). The GitHub Actions workflow (`.github/workflows/release.yml`) creates a GitHub Release via `softprops/action-gh-release@v2`: the notes are only that version's CHANGELOG section (plus the compare link), and the five scripts are attached as assets (their download counts are the install statistics). Raise `MIN_VERSION` only for serious fixes: installations older than it get an IMPORTANT update note.
 
 ## Service Control (on router)
 
