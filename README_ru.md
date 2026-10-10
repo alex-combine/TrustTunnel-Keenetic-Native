@@ -266,7 +266,7 @@ included_routes = []       # обязательно: с готовым устр�
 
 Без `included_routes = []` клиент останавливается с ошибкой `Managed routing for an existing TUN device requires sport rule support`. Маршрутизация не меняется: в обоих режимах Keenetic ведёт трафик через `OpkgTunN`, меняется только то, кто создаёт устройство.
 
-**Проверено на:** Keenetic Hero 4G (KN-2310), KeeneticOS 5.1.6 (mipsel), клиент TrustTunnel 1.1.11. После переключения и одной перезагрузки `show interface OpkgTun0 stat` показывает растущий `timestamp`, `rxbytes` совпадает со счётчиком ядра `/sys/class/net/opkgtun0/statistics/rx_bytes` байт в байт, а веб-интерфейс рисует график трафика.
+**Проверено на:** Keenetic Hero 4G (KN-2310), KeeneticOS 5.1.7 (mipsel), клиент TrustTunnel 1.1.11. После переключения и одной перезагрузки `show interface OpkgTun0 stat` показывает растущий `timestamp`, `rxbytes` совпадает со счётчиком ядра `/sys/class/net/opkgtun0/statistics/rx_bytes` байт в байт, а веб-интерфейс рисует график трафика.
 
 ### Новая установка
 

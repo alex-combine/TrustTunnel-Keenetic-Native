@@ -266,7 +266,7 @@ included_routes = []       # required: with an existing device the client does n
 
 Without `included_routes = []` the client stops with `Managed routing for an existing TUN device requires sport rule support`. Routing does not change: KeeneticOS routes through `OpkgTunN` in both modes, only the owner of the device changes.
 
-**Tested on:** Keenetic Hero 4G (KN-2310), KeeneticOS 5.1.6 (mipsel), TrustTunnel client 1.1.11. After the switch and one reboot `show interface OpkgTun0 stat` shows a growing `timestamp`, `rxbytes` equals the kernel counter `/sys/class/net/opkgtun0/statistics/rx_bytes` byte for byte, and the web interface draws the traffic graph.
+**Tested on:** Keenetic Hero 4G (KN-2310), KeeneticOS 5.1.7 (mipsel), TrustTunnel client 1.1.11. After the switch and one reboot `show interface OpkgTun0 stat` shows a growing `timestamp`, `rxbytes` equals the kernel counter `/sys/class/net/opkgtun0/statistics/rx_bytes` byte for byte, and the web interface draws the traffic graph.
 
 ### New installation
 
