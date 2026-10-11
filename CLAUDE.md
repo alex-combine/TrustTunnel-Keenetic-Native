@@ -10,7 +10,7 @@ Installer output and code comments are in English. The README exists in English 
 
 ## Architecture
 
-The system has five main components:
+The system has five main components plus an optional add-on (6):
 
 1. **install.sh** — Bootstrap installer. Detects the latest GitHub release (or accepts `--dev`/`--version` flags), downloads configure.sh, and executes it.
 
@@ -21,6 +21,8 @@ The system has five main components:
 4. **010-trusttunnel.sh** — WAN hook (`/opt/etc/ndm/wan.d/`). Triggers service reload when the WAN interface comes up, ensuring client reconnects after network changes. In attach mode only `tun0` is brought down before reload.
 
 5. **tt-stats** — helper installed to `/opt/bin/tt-stats`. `status` (read-only diagnostics), `enable [--reboot]` (safe switch to attach mode: pre-checks, backup to `backup-classic/` with MD5SUMS, 10-minute safety timer, verification with automatic rollback, boot guard `S99ttstats-guard`), `disable` (restore the classic setup), `reboot` (pre-flight checks, then reboot). Downloads the scripts from `TTS_REPO_URL` (set by configure.sh).
+
+6. **razvilka/** — optional add-on «Razvilka» (beta): home country direct, everything else via VPN, controlled from the user's own Telegram bot running on the router. Independent of TrustTunnel (works with any Keenetic VPN interface). Own installer `razvilka/razvilka-install.sh` (`--demo`, `--root=DIR` sandbox, manifest rollback, `--uninstall`) and files in `razvilka/razvilka-files/` (`core/`, `bot/`, `data/`). The bot and installer talk to the user in Russian and English (`L 'ru' 'en'`); code comments are in English. Runtime paths: `/opt/share/razvilka/`, `/opt/etc/razvilka/` (bot token `tg.env`, 600), `/opt/etc/init.d/S99razvilka`, `/opt/var/log/razvilka.log`. Released as `razvilka.tar.gz`; `configure.sh` only offers to download it (installing needs a working VPN). Keep `razvilka/README.md` and `razvilka/README_ru.md` in sync; the folder must stay self-contained so it can be moved to its own repository later.
 
 ### Data Flow
 
@@ -51,7 +53,7 @@ install.sh → downloads → configure.sh → installs → S99trusttunnel + 010-
 
 ## Release Process
 
-Add a `## vX.Y.Z — title` section at the top of `CHANGELOG.md`, bump `TTS_VERSION` in `tt-stats`, then push a tag matching `v*` (e.g., `v2.2.1`). The GitHub Actions workflow (`.github/workflows/release.yml`) creates a GitHub Release via `softprops/action-gh-release@v2`: the notes are only that version's CHANGELOG section (plus the compare link), and the five scripts are attached as assets (their download counts are the install statistics). Raise `MIN_VERSION` only for serious fixes: installations older than it get an IMPORTANT update note.
+Add a `## vX.Y.Z — title` section at the top of `CHANGELOG.md`, bump `TTS_VERSION` in `tt-stats`, then push a tag matching `v*` (e.g., `v2.2.1`). The GitHub Actions workflow (`.github/workflows/release.yml`) creates a GitHub Release via `softprops/action-gh-release@v2`: the notes are only that version's CHANGELOG section (plus the compare link), and the five scripts plus `razvilka.tar.gz` are attached as assets (their download counts are the install statistics). Raise `MIN_VERSION` only for serious fixes: installations older than it get an IMPORTANT update note.
 
 ## Service Control (on router)
 

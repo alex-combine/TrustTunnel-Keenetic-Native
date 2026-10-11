@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.3.0 — Razvilka (beta): home country direct, everything else via VPN
+
+- New optional component **Razvilka** in [`razvilka/`](razvilka/README.md): sites of your own country go
+  direct through the ISP, everything else through the VPN. The router builds the country network map itself
+  every night (RIPE / ipverse, minus data centers); you control it from your own Telegram bot running on the
+  router (sh + curl + jq, English and Russian): check a site, send it direct or via VPN, switch a device,
+  get alerts when the VPN drops, optional "dead man's switch" watchdog by email.
+- Works with any VPN connection in Keenetic, not only TrustTunnel. Off unless you install it.
+- Own installer `razvilka-install.sh`: dry run (`--demo`), test into a folder (`--root`), settings backup,
+  rollback by a manifest, automatic rollback if the VPN does not answer after installing, `--uninstall`.
+- Released as `razvilka.tar.gz`; `configure.sh` offers to download it at the end of the setup.
+- Beta: tested on Keenetic Hero 4G (KN-2310, 128 MB) and in a sandbox.
+
 ## v2.2.0 — update notifications
 
 - The router now tells you when a new release is out (it never updates itself):

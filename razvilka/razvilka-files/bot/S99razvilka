@@ -1,0 +1,19 @@
+#!/bin/sh
+# Razvilka — Entware service: starts the bot and restarts it 15 s after a crash. v1.0
+PID=/opt/var/run/razvilka.pid
+BOTPID=/opt/var/run/razvilka-bot.pid
+BOT=/opt/share/razvilka/rzv-bot.sh
+running() { [ -f $PID ] && kill -0 "$(cat $PID)" 2>/dev/null; }
+case "$1" in
+  start)
+    running && { echo 'Развилка уже работает'; exit 0; }
+    ( trap 'exit 0' TERM
+      while :; do $BOT run & echo $! > $BOTPID; wait $!; sleep 15; done ) </dev/null >/dev/null 2>&1 &
+    echo $! > $PID; echo 'Развилка запущена' ;;
+  stop)
+    running && kill "$(cat $PID)"; [ -f $BOTPID ] && kill "$(cat $BOTPID)" 2>/dev/null
+    rm -f $PID $BOTPID; echo 'Развилка остановлена' ;;
+  restart) $0 stop; sleep 2; $0 start ;;
+  status) running && echo 'Развилка работает' || echo 'Развилка не работает' ;;
+  *) echo "Использование: $0 start|stop|restart|status" ;;
+esac

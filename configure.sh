@@ -323,6 +323,25 @@ if [ "$TT_MODE" = "tun" ] && [ -n "$CLIENT_VERSION" ]; then
     fi
 fi
 
+# === Razvilka (beta, optional): home country direct, everything else via VPN ===
+RZV_DIR="/opt/tmp/razvilka-setup"
+RZV_GOT=""
+echo ""
+echo "Razvilka (beta, optional): sites of your own country go direct, everything else via VPN,"
+echo "controlled from your own Telegram bot. Works with any VPN connection. See razvilka/README.md"
+if ask_yes_no "Download Razvilka now? It is installed separately, once the VPN works"; then
+    mkdir -p "$RZV_DIR"
+    if curl -fsSL "$REPO_URL/razvilka.tar.gz" -o /opt/tmp/razvilka.tar.gz && tar xzf /opt/tmp/razvilka.tar.gz -C "$RZV_DIR"; then
+        RZV_GOT="yes"
+        echo "Razvilka downloaded to $RZV_DIR"
+    else
+        echo "Could not download Razvilka (not attached to this release?). See razvilka/README.md to get it later."
+    fi
+    rm -f /opt/tmp/razvilka.tar.gz
+else
+    echo "Razvilka skipped."
+fi
+
 echo ""
 echo "=== Installation completed ==="
 echo ""
@@ -358,6 +377,11 @@ echo ""
 echo "2. Start the service: /opt/etc/init.d/S99trusttunnel start"
 if [ "$TT_MODE" = "tun" ]; then
     echo "3. Check dashboard statistics: tt-stats status"
+fi
+if [ -n "$RZV_GOT" ]; then
+    echo ""
+    echo "Razvilka (when the VPN works): sh $RZV_DIR/razvilka-install.sh --demo   (dry run, changes nothing)"
+    echo "                               sh $RZV_DIR/razvilka-install.sh          (install; --uninstall to remove)"
 fi
 echo ""
 

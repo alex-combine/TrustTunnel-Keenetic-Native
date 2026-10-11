@@ -10,7 +10,7 @@
 >
 > **What is new:** the TUN connection (OpkgTunN) finally shows real traffic statistics in the Keenetic web interface — the classic setup always shows 0.
 > Existing installations switch with one command, with automatic rollback if anything goes wrong.
-> Jump to: [Dashboard statistics](#dashboard-statistics-attach-mode) · [Upgrading an existing router](#upgrading-a-router-with-the-classic-setup)
+> Jump to: [Dashboard statistics](#dashboard-statistics-attach-mode) · [Upgrading an existing router](#upgrading-a-router-with-the-classic-setup) · [Razvilka (beta): home country direct](#razvilka-beta-home-country-direct-everything-else-via-vpn)
 
 ![The TrustTunnel TUN connection in the Keenetic web interface: live traffic graph, current speed and totals](docs/dashboard-stats.png)
 
@@ -355,6 +355,16 @@ Prefer e-mail? On the GitHub page click **Watch → Custom → Releases**.
 - **MTU?** In attach mode the device MTU comes from `TUN_MTU` in `mode.conf`; `tt-stats enable` sets it from `mtu_size` of the client config and keeps `interface OpkgTunN ip mtu` equal to it.
 - **What if the VPN server itself is down right after a reboot?** The boot guard cannot tell a server outage from a failed switch, so it restores the classic setup to be safe. When the server is back, run `tt-stats enable --reboot` again.
 - **How do I go back?** `tt-stats disable` (or restore the files from `/opt/trusttunnel_client/backup-classic/` by hand).
+
+## Razvilka (beta): home country direct, everything else via VPN
+
+An optional add-on in [`razvilka/`](razvilka/README.md). Sites and services of your own country go direct through the ISP (fast, local banks and government sites are happy), everything else goes through the VPN. The router builds the map of your country's networks itself every night, and you control it from your own Telegram bot that runs on the router: check a site, send it direct or via VPN, switch a device, get alerts when the VPN drops.
+
+- Works with **any VPN connection in Keenetic** — TrustTunnel is not required.
+- Off unless you install it; its own installer has a dry run, rollback and `--uninstall`.
+- **Beta**: tested on Keenetic Hero 4G (KN-2310, 128 MB).
+
+`configure.sh` offers to download it at the end of the setup, or see [razvilka/README.md](razvilka/README.md).
 
 ## File Structure
 
