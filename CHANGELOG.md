@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.3.1 — smarter memory guard
+
+- `tt-stats memguard` no longer restarts a **small** client (below `MEMGUARD_SMALL_KB`, 5000 kB): then
+  something else eats the memory, and a restart would only break connections.
+- The VPN **pauses only if memory is still critical** (below `MEMGUARD_CRIT_KB`, by default 2/3 of the
+  threshold). 3 alarms in 10 minutes with memory above that are only logged.
+- **Nightly restart** of a bloated client: `memguard on` adds `/opt/etc/cron.daily/tt-memguard-nightly`, it
+  restarts the client if it has grown above `MEMGUARD_NIGHT_KB` (12000 kB, `0` = off); `memguard off` removes it.
+- Fix: the client size is read once per alarm. Before, a client that was restarting at that moment
+  could be restarted again.
+- The new values can be set in `mode.conf`; `tt-stats memguard` shows them.
+
 ## v2.3.0 — Razvilka (beta): home country direct, everything else via VPN
 
 - New optional component **Razvilka** in [`razvilka/`](razvilka/README.md): sites of your own country go

@@ -335,6 +335,8 @@ tt-stats memguard off         # disable
 
 Every 5 seconds the guard checks free memory (`MemAvailable`). Below the threshold it restarts only the TrustTunnel client: that frees the client's buffers, the tunnel reconnects in a few seconds. If this happens 3 times within 10 minutes, it stops the VPN for 15 minutes and then starts it again — a short outage is better than a hung router. With a kill switch, devices that may use only the VPN have no internet during the pause. Autostart: `/opt/etc/init.d/S97tt-memguard`, log: `/opt/var/log/tt-memguard.log`.
 
+The guard does not hit the wrong target: if the client is small (below 5000 kB), something else eats the memory, so it only writes to the log. The VPN pauses only if memory is still critical (below 2/3 of the threshold); otherwise the event is just logged. Once a night it restarts the client if the client has grown above 12000 kB (`/opt/etc/cron.daily/tt-memguard-nightly`). These numbers can be changed in `mode.conf`: `MEMGUARD_SMALL_KB`, `MEMGUARD_CRIT_KB`, `MEMGUARD_NIGHT_KB` (`0` turns the nightly restart off), then `tt-stats memguard on` again.
+
 ### Update notifications
 
 The router tells you when a new release is out — it never updates itself:

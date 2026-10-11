@@ -17,13 +17,15 @@
 #   guard              boot check (called by /opt/etc/init.d/S99ttstats-guard)
 #   memguard on [KB]|off|status
 #                      memory guard for 128 MB routers: restart the client when free
-#                      memory drops below KB (default 10000) instead of letting the router hang
+#                      memory drops below KB (default 10000) instead of letting the router hang;
+#                      a small client is left alone, the VPN pauses only if memory stays critical,
+#                      and a bloated client is restarted once a night (/opt/etc/cron.daily)
 #   update-check       is a newer release out? Reads only the version number, downloads and
 #                      changes nothing. A daily check is installed in /opt/etc/cron.daily
 #
 # Log: /opt/var/log/tt-stats.log, memory guard: /opt/var/log/tt-memguard.log
 
-TTS_VERSION="2.3.0"
+TTS_VERSION="2.3.1"
 SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 TTS_REPO_URL="${TTS_REPO_URL:-https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download}"
 
@@ -54,6 +56,7 @@ MEMGUARD_PID="${MEMGUARD_PID:-/opt/var/run/tt-memguard.pid}"
 MEMGUARD_LOG="${MEMGUARD_LOG:-/opt/var/log/tt-memguard.log}"
 MEMGUARD_PAUSE="/tmp/tt-memguard.pause"
 MEMGUARD_HIST="/tmp/tt-memguard.hist"
+MEMGUARD_CRON="${MEMGUARD_CRON:-/opt/etc/cron.daily/tt-memguard-nightly}"
 MG_TARGET="${MG_TARGET:-/opt/etc/init.d/S99trusttunnel}"   # what the guard restarts (overridable for tests)
 
 TT_MODE="socks5"
@@ -64,6 +67,9 @@ HC_TARGET_URL="http://connectivitycheck.gstatic.com/generate_204"
 [ -f "$MODE_CONF" ] && . "$MODE_CONF"
 TUN_IDX="${TUN_IDX:-0}"
 MEMGUARD_LOW_KB="${MEMGUARD_LOW_KB:-10000}"
+MEMGUARD_CRIT_KB="${MEMGUARD_CRIT_KB:-$((MEMGUARD_LOW_KB * 2 / 3))}"   # pause the VPN only below this
+MEMGUARD_SMALL_KB="${MEMGUARD_SMALL_KB:-5000}"   # client smaller than this: memory is eaten by something else
+MEMGUARD_NIGHT_KB="${MEMGUARD_NIGHT_KB:-12000}"  # nightly restart if the client is bigger (0 = off)
 OPKG_IFACE="opkgtun${TUN_IDX}"
 NDM_IFACE="OpkgTun${TUN_IDX}"
 
@@ -309,8 +315,10 @@ upd_status_line() {  # uses the cached result; checks again if it is older than 
 # ---------------------------------------------------------- memory guard ---
 # On routers with 128 MB of RAM a long fast download through the tunnel can exhaust
 # memory (the client buffers faster than the CPU encrypts) and the router hangs.
-# The guard restarts only the client (frees its buffers); 3 times in 10 minutes ->
-# the VPN pauses for 15 minutes and starts again. A short outage beats a hung router.
+# The guard restarts only the client (frees its buffers); 3 times in 10 minutes and
+# memory is still critical -> the VPN pauses for 15 minutes and starts again. A short
+# outage beats a hung router. A small client is not restarted: then something else
+# eats the memory and a restart would only break connections.
 
 mem_avail() { awk '/MemAvailable/ {print $2; exit}' /proc/meminfo; }
 client_rss() { p=$(pidof trusttunnel_client | cut -d' ' -f1); [ -n "$p" ] && awk '/VmRSS/ {print $2}' "/proc/$p/status"; }
@@ -345,18 +353,34 @@ cmd_memguard_run() {
             { awk -v n="$now" 'n-$1<600' "$MEMGUARD_HIST" 2>/dev/null; echo "$now"; } > "$MEMGUARD_HIST.new"
             mv "$MEMGUARD_HIST.new" "$MEMGUARD_HIST"
             recent=$(wc -l < "$MEMGUARD_HIST")
-            if [ "$recent" -ge 3 ]; then
-                mlog "PAUSE the VPN for 15 minutes: free ${a} kB, client $(client_rss) kB, ${recent} times in 10 minutes"
+            r=$(client_rss)   # read once: the client may be restarting right now
+            if [ "$recent" -ge 3 ] && [ "$a" -lt "$MEMGUARD_CRIT_KB" ]; then
+                mlog "PAUSE the VPN for 15 minutes: free ${a} kB, client ${r:-?} kB, ${recent} times in 10 minutes"
                 touch "$MEMGUARD_PAUSE"; "$MG_TARGET" stop >/dev/null 2>&1
                 ( sleep 900; rm -f "$MEMGUARD_PAUSE"; "$MG_TARGET" start >/dev/null 2>&1 ) </dev/null >/dev/null 2>&1 &
+            elif [ "$recent" -ge 3 ]; then
+                mlog "not restarting: free ${a} kB is above the critical ${MEMGUARD_CRIT_KB} kB, client ${r:-?} kB, ${recent} times in 10 minutes - the client is not the cause"
+            elif [ -z "$r" ]; then
+                mlog "not restarting: the client is not running right now (free ${a} kB)"
+            elif [ "$r" -lt "$MEMGUARD_SMALL_KB" ]; then
+                mlog "not restarting: the client is small (${r} kB), free ${a} kB - something else eats the memory"
             else
-                mlog "restarting the client: free ${a} kB, client $(client_rss) kB (${recent} in 10 minutes)"
+                mlog "restarting the client: free ${a} kB, client ${r} kB (${recent} in 10 minutes)"
                 "$MG_TARGET" reload >/dev/null 2>&1
             fi
             sleep 60
         fi
         sleep 5
     done
+}
+
+cmd_memguard_nightly() {  # from cron.daily: restart a bloated client while nobody uses the VPN
+    [ "$MEMGUARD_NIGHT_KB" -gt 0 ] 2>/dev/null || return 0
+    [ -f "$MEMGUARD_PAUSE" ] && return 0
+    r=$(client_rss)
+    [ -n "$r" ] && [ "$r" -gt "$MEMGUARD_NIGHT_KB" ] || return 0
+    mlog "nightly restart: client ${r} kB > ${MEMGUARD_NIGHT_KB} kB, free $(mem_avail) kB"
+    "$MG_TARGET" reload >/dev/null 2>&1
 }
 
 cmd_memguard() {  # $1 = on|off|status, $2 = threshold kB (optional, with on)
@@ -379,16 +403,26 @@ esac
 exit 0
 EOF
             chmod +x "$MEMGUARD_INIT"
+            if [ -d "$(dirname "$MEMGUARD_CRON")" ]; then
+                cat > "$MEMGUARD_CRON" <<EOF
+#!/bin/sh
+# tt-stats memory guard: once a night restart the TrustTunnel client if it has grown
+# above MEMGUARD_NIGHT_KB (mode.conf, 0 = off). Managed by: tt-stats memguard on|off
+$SELF memguard-nightly </dev/null >/dev/null 2>&1
+EOF
+                chmod +x "$MEMGUARD_CRON"
+            fi
             mg_stop; mg_start
             mg_running && say "Memory guard is on: threshold ${MEMGUARD_LOW_KB} kB (now free $(mem_avail) kB). Log: $MEMGUARD_LOG" \
                        || die "memory guard did not start, see $MEMGUARD_LOG"
             ;;
         off)
-            mg_stop; rm -f "$MEMGUARD_INIT" "$MEMGUARD_PAUSE"
+            mg_stop; rm -f "$MEMGUARD_INIT" "$MEMGUARD_PAUSE" "$MEMGUARD_CRON"
             say "Memory guard is off"
             ;;
         *)
-            if [ -x "$MEMGUARD_INIT" ]; then echo "Memory guard: on (threshold ${MEMGUARD_LOW_KB} kB)$(mg_running && echo ', running' || echo ', NOT running')"
+            if [ -x "$MEMGUARD_INIT" ]; then echo "Memory guard: on (threshold ${MEMGUARD_LOW_KB} kB, pause below ${MEMGUARD_CRIT_KB} kB, small client < ${MEMGUARD_SMALL_KB} kB)$(mg_running && echo ', running' || echo ', NOT running')"
+                if [ -x "$MEMGUARD_CRON" ] && [ "$MEMGUARD_NIGHT_KB" -gt 0 ] 2>/dev/null; then echo "Nightly restart: if the client is above ${MEMGUARD_NIGHT_KB} kB"; else echo "Nightly restart: off"; fi
             else echo "Memory guard: off — enable: tt-stats memguard on"; fi
             echo "Free memory:  $(mem_avail) kB; client: $(client_rss) kB"
             [ -f "$MEMGUARD_PAUSE" ] && echo "VPN is paused by the guard (starts again within 15 minutes)"
@@ -552,6 +586,7 @@ case "$1" in
     guard)     cmd_guard ;;
     memguard)  cmd_memguard "$2" "$3" ;;
     memguard-run)   cmd_memguard_run ;;
+    memguard-nightly) cmd_memguard_nightly ;;
     memguard-start) mg_start ;;
     memguard-stop)  mg_stop ;;
     version)   echo "$TTS_VERSION" ;;
