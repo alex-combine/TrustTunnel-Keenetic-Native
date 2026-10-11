@@ -50,7 +50,7 @@ case "$LNG" in ru|en) ;; *) LNG=en;; esac
 
 # ================= UNINSTALL =================
 if [ $MODE = uninstall ]; then
-  head1 "🏠 $(L 'Развилка — удаление' 'Razvilka — removal') v$VERSION"
+  head1 "🔀 $(L 'Развилка — удаление' 'Razvilka — removal') v$VERSION"
   [ -s "$R$MAN" ] || { echo "  $(L 'Развилка не установлена этим установщиком (нет списка сделанного).' 'Razvilka was not installed by this installer (no manifest).')"; exit 0; }
   echo "  $(L 'Верну всё по списку сделанного:' 'I will undo everything from the manifest:') $R$MAN"
   ask "$(L 'Удаляем? (да/нет)' 'Remove? (yes/no)')" "$([ $YES = 1 ] && yes_word || L нет no)"; is_yes "$ANS" || { echo "  $(L 'Хорошо, ничего не меняю.' 'OK, nothing changed.')"; exit 0; }
@@ -70,7 +70,37 @@ if [ $MODE = uninstall ]; then
   echo; okm "$(L 'Готово. Развилка удалена.' 'Done. Razvilka removed.')"; exit 0
 fi
 
-head1 "🏠 $(L 'Развилка — установка' 'Razvilka — setup') v$VERSION"
+head1 "🔀 $(L 'Развилка — установка' 'Razvilka — setup') v$VERSION"
+# ---------- what is Razvilka ----------
+if [ $LNG = ru ]; then cat <<'EOF'
+  Развилка делит интернет на роутере на две дороги:
+    • сайты и сервисы своей страны — напрямую, через провайдера
+      (быстро; банки, госуслуги и местные сервисы не ругаются на VPN);
+    • всё остальное — через ваш VPN.
+  Роутер сам собирает карту сетей страны и обновляет её каждую ночь.
+  Управление — из вашего личного Telegram-бота: проверить сайт и пустить его
+  напрямую или через VPN, переключить устройство, получить тревогу, если VPN пропал.
+
+  Что понадобится: работающий VPN в Keenetic и свой бот (@BotFather → /newbot).
+  Сначала я всё проверю и покажу план — без вашего «да» ничего не меняю.
+  Удалить потом: sh razvilka-install.sh --uninstall. Это бета: о проблемах пишите
+  в Issues на GitHub (alex-combine/TrustTunnel-Keenetic-Native).
+EOF
+else cat <<'EOF'
+  Razvilka splits the internet on your router into two roads:
+    • sites and services of your own country — direct, through your ISP
+      (fast; local banks, government and other services do not complain about a VPN);
+    • everything else — through your VPN.
+  The router builds the map of your country's networks itself and refreshes it every night.
+  You control it from your own Telegram bot: check a site and send it direct or via VPN,
+  switch a device, get an alert when the VPN drops.
+
+  You will need: a working VPN in Keenetic and your own bot (@BotFather → /newbot).
+  First I check everything and show the plan — nothing changes without your "yes".
+  To remove later: sh razvilka-install.sh --uninstall. This is a beta: please report problems
+  in Issues on GitHub (alex-combine/TrustTunnel-Keenetic-Native).
+EOF
+fi
 [ $DEMO = 1 ] && echo "  🧪 $(L 'ПРОБА: смотрю и показываю, но ничего не меняю' 'DRY RUN: I look and show, but change nothing')"
 [ -n "$R" ] && echo "  🧪 $(L 'ПРОБА В ПАПКУ' 'TEST INTO FOLDER'): $R — $(L 'команды прошивки только печатаю' 'firmware commands are only printed')"
 
