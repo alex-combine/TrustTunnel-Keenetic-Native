@@ -21,6 +21,9 @@
   after removing an exception the bot named another site (the list screen reused the variable);
   the «already in the country map» check never matched (`awk IP=…` is not set in `BEGIN`, now `-v`),
   so hints could suggest companies that already go direct and the site card missed company exceptions.
+- **Long buttons answer at once:** «Send direct / via VPN», «Remove exception», device switch, home country
+  on/off and undo immediately replace the message with «⏳ what I am doing… no need to press again» and take
+  the buttons away; while one long job runs, other long buttons answer «⏳ Still busy» and start nothing.
 - **Readable hints:** the company name without registry codes («HCRU-AS - JSC _RU-CENTER_, RU» → «RU-CENTER»),
   the device that used it, the site name when the address tells it, and a plain tip which button to press.
   After «Send direct» the bot named another company (the network refresh reused the variable); the exception

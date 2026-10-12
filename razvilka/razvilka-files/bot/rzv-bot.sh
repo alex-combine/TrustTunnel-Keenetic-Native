@@ -343,6 +343,15 @@ If something breaks, I will write to you myself.' "$MAIN_KB"
   esac
 }
 act() { $APP/rzv-act.sh "$@"; }   # heavy actions run as a separate process (with the lock)
+JOB=$TMP/job                       # what the router is busy with now (one long job at a time)
+slow() {   # slow "what I am doing" action args… — answer at once, take the buttons away, then work in the background
+  if [ -f $JOB ] && [ -z "$(find $JOB -mmin +15 2>/dev/null)" ]; then
+    toast "$CQ" "$(L "⏳ Ещё выполняю: $(cat $JOB). Подожди немного." "⏳ Still busy: $(cat $JOB). Please wait a little.")"; return 0; fi
+  printf '%s' "$1" > $JOB; toast "$CQ"
+  edit $MID "⏳ $1
+$(L 'Это займёт до пары минут — я напишу, когда закончу. Нажимать ещё раз не нужно.' 'This takes up to a couple of minutes — I will write when it is done. No need to press again.')"
+  shift; ( act "$@"; rm -f $JOB ) &
+}
 on_callback() {
   s=${DATA#*:}; WAIT=$(L 'Минутку…' 'One moment…')
   case "$DATA" in
@@ -355,16 +364,18 @@ on_callback() {
     c:*)  is_num "$s" && { toast "$CQ"; screen_company $s; scr_edit $MID; } ;;
     s:*)  is_num "$s" && { toast "$CQ"; screen_site $s; scr_edit $MID; } ;;
     v:*)  is_num "$s" && { toast "$CQ"; screen_vsite $s; scr_edit $MID; } ;;
-    gd:*) is_num "$s" && { toast "$CQ" "$WAIT"; act service_del $s $MID & } ;;
-    cd:*) is_num "$s" && { toast "$CQ" "$WAIT"; act company_del $s $MID & } ;;
-    sd:*) is_num "$s" && { toast "$CQ" "$WAIT"; act site_del $s $MID & } ;;
-    vd:*) is_num "$s" && { toast "$CQ" "$(L 'Минутку — пересобираю карту страны…' 'One moment — rebuilding the country map…')"; act vsite_del $s $MID & } ;;
+    gd:*) is_num "$s" && slow "$(L 'Убираю исключение — скачиваю сети заново…' 'Removing the exception — refreshing the networks…')" service_del $s $MID ;;
+    cd:*) is_num "$s" && slow "$(L 'Убираю компанию — скачиваю сети заново…' 'Removing the company — refreshing the networks…')" company_del $s $MID ;;
+    sd:*) is_num "$s" && slow "$(L 'Убираю исключение…' 'Removing the exception…')" site_del $s $MID ;;
+    vd:*) is_num "$s" && slow "$(L 'Возвращаю сайт к общему правилу — пересобираю карту страны…' 'Putting the site back to the general rule — rebuilding the country map…')" vsite_del $s $MID ;;
     as|ac|vpn)
       c=$(kv_get card); [ -z "$c" ] && { toast "$CQ" "$(L 'Устарело — пришли адрес ещё раз' 'Outdated — send the address again')"; return; }
-      [ $DATA = vpn ] && toast "$CQ" "$(L 'Минутку — около полутора минут…' 'One moment — about a minute and a half…')" || toast "$CQ" "$WAIT"
-      act card_$DATA $MID & ;;
+      case $DATA in
+        as) w=$(L 'Пускаю сайт напрямую…' 'Sending the site direct…');; ac) w=$(L 'Пускаю компанию напрямую — скачиваю её сети…' 'Sending the company direct — getting its networks…');;
+        *) w=$(L 'Пускаю сайт через VPN — пересобираю карту страны…' 'Sending the site via VPN — rebuilding the country map…');; esac
+      slow "$w" card_$DATA $MID ;;
     x) kv_del card; kv_del await; toast "$CQ" "$(L 'Хорошо' 'OK')"; edit $MID "${MTEXT:-$(L 'Хорошо.' 'OK.')}" ;;
-    dev:*) is_mac "$s" && { toast "$CQ" "$(L 'Переключаю…' 'Switching…')"; act device $s $MID & } ;;
+    dev:*) is_mac "$s" && slow "$(L 'Переключаю устройство…' 'Switching the device…')" device $s $MID ;;
     dg) if [ "$(kv_get digest 1)" = 1 ]; then kv_set digest 0; toast "$CQ" "$(L 'Сводка выключена' 'Summary off')"; else kv_set digest 1; toast "$CQ" "$(L 'Сводка включена' 'Summary on')"; fi
         screen_settings; scr_edit $MID ;;
     hint) [ -f $HINTS_OFF ] && rm -f $HINTS_OFF || : > $HINTS_OFF; toast "$CQ" "$(L 'Готово' 'Done')"; screen_settings; scr_edit $MID ;;
@@ -382,15 +393,15 @@ Razvilka will forget where devices connected and which hints it already showed. 
 Сайты своей страны (банки, госуслуги, местные сервисы) пойдут через VPN — некоторые из них могут не пустить. Включить обратно можно здесь же, сборка займёт около двух минут." "$(flag) Turn off «Home country direct»?
 
 Sites of your home country (banks, government, local services) will go via VPN — some of them may refuse. You can turn it back on here, the build takes about two minutes.")" "$(L 'Выключить' 'Turn off')" geo:off; scr_edit $MID
-         else toast "$CQ" "$(L 'Включаю…' 'Turning on…')"; act geo $MID on & fi ;;
-    geo:off) toast "$CQ" "$(L 'Выключаю…' 'Turning off…')"; act geo $MID off & ;;
-    lite) toast "$CQ" "$(L 'Включаю…' 'Turning on…')"; act lite $MID & ;;
+         else slow "$(L 'Включаю «Своя страна напрямую» — собираю карту страны…' 'Turning on «Home country direct» — building the country map…')" geo $MID on; fi ;;
+    geo:off) slow "$(L 'Выключаю «Своя страна напрямую»…' 'Turning off «Home country direct»…')" geo $MID off ;;
+    lite) slow "$(L 'Включаю лёгкую карту — собираю её…' 'Turning on the light map — building it…')" lite $MID ;;
     rb:ask) toast "$CQ"; scr "$(L '↩️ Вернуть карту страны и сети исключений такими, какими они были до последнего обновления?
 
 Устройства и твои сайты не изменятся.' '↩️ Bring the country map and exception networks back to how they were before the last update?
 
 Devices and your sites will not change.')"; row "$(L '↩️ Вернуть как было' '↩️ Undo')" rb:yes "$(L 'Оставить' 'Keep')" set; scr_edit $MID ;;
-    rb:yes) toast "$CQ" "$(L 'Возвращаю…' 'Undoing…')"; act rollback $MID & ;;
+    rb:yes) slow "$(L 'Возвращаю как было…' 'Undoing…')" rollback $MID ;;
     hc) toast "$CQ"; screen_hc; scr_edit $MID ;;
     hct) if hc_ping /fail; then toast "$CQ" "$(L 'Отправил' 'Sent')"; screen_hc; scr_edit $MID "$(L '🧪 Отправил сторожу «тревога». Сейчас придёт тревога, а через 5 минут — «снова в порядке».' '🧪 Sent «alarm» to the watchdog. An alarm will come now, and in 5 minutes — «back to normal».')
 
@@ -410,7 +421,8 @@ The router will stop sending signals. Delete or pause the check at the watchdog 
       screen_settings; scr_edit $MID "$(L '❌ Сторож связи выключен. Не забудь удалить или поставить на паузу проверку у сервиса-сторожа.' '❌ The connection watchdog is off. Remember to delete or pause the check at your watchdog service.')
 
 " ;;
-    add:*|skip:*) is_num "$s" && { toast "$CQ" "$(L 'Принято' 'Got it')"; act hint_${DATA%%:*} $s $MID & } ;;
+    add:*) is_num "$s" && slow "$(L 'Пускаю компанию напрямую — скачиваю её сети…' 'Sending the company direct — getting its networks…')" hint_add $s $MID ;;
+    skip:*) is_num "$s" && { toast "$CQ" "$(L 'Принято' 'Got it')"; act hint_skip $s $MID & } ;;
     del|del:*) toast "$CQ" "$(L 'Открой 📋 Мои исключения — там новые кнопки' 'Open 📋 My exceptions — the new buttons are there')" ;;
     *) toast "$CQ" ;;
   esac
