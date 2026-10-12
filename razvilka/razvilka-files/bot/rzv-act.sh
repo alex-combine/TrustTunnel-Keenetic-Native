@@ -103,7 +103,7 @@ watch() {
   [ -s $W/flows ] || return 0
   CC=$(country | tr a-z A-Z); stale=''; hints=0; nowt=$(now)
   while read -r by ip; do
-    cat $R_FILE $GEO_FILE 2>/dev/null | awk "$NET2INT"' BEGIN{x=ip2n(IP)} /\//{rng($1); if(x>=S&&x<=E){f=1; exit}} END{exit !f}' IP=$ip && continue
+    cat $R_FILE $GEO_FILE 2>/dev/null | awk -v IP=$ip "$NET2INT"' BEGIN{x=ip2n(IP)} /\//{rng($1); if(x>=S&&x<=E){f=1; exit}} END{exit !f}' && continue   # -v: the IP must be known in BEGIN
     set -- $(owner $ip); asn=$1; cc=$2; shift 2; holder="$*"; [ "$asn" = 0 ] && continue
     if asn_in $ALLOW $asn && ! asn_in $DENY $asn; then
       last=$(awk -v a=$asn '$1==a{t=$2} END{print t+0}' $REFRESHED 2>/dev/null)
@@ -288,27 +288,27 @@ It works for devices that ask the router for addresses.")"; else res="$(L '😕 
         unlock; log "сайт $d — через VPN"; kv_del card; row "$(L '📋 Мои исключения' '📋 My exceptions')" list; edit $MID "$res" "$(kb_json $SKB)" ;;
     esac ;;
   site_del) n=$1; MID=$2; d=$(list_get $ETC/sites $n); lock 300 || busy
-    [ -n "$d" ] && site_del $d; unlock; screen_list; scr_edit $MID "${d:+$(L "✅ $d теперь через VPN." "✅ $d now goes via VPN.")
+    [ -n "$d" ] && site_del $d; unlock; ok="${d:+$(L "✅ $d теперь через VPN." "✅ $d now goes via VPN.")
 
-}" ;;
+}"; screen_list; scr_edit $MID "$ok" ;;
   vsite_del) n=$1; MID=$2; d=$(list_get $ETC/vpn_sites $n); lock 300 || busy
     [ -n "$d" ] && { list_del $ETC/vpn_sites $d; geo_sync; log "сайт $d — снова по общему правилу"; }
-    unlock; screen_list; scr_edit $MID "${d:+$(L "✅ $d снова идёт по общему правилу." "✅ $d follows the general rule again.")
+    unlock; ok="${d:+$(L "✅ $d снова идёт по общему правилу." "✅ $d follows the general rule again.")
 
-}" ;;
+}"; screen_list; scr_edit $MID "$ok" ;;
   company_del) a=$1; MID=$2; nm=$(companies | awk -v a="$a" '$1==a{$1=""; sub(/^ /,""); print; exit}'); lock 600 || busy
     [ -n "$nm" ] && { allow_del $a "$nm"; refresh "$(L "убрано кнопкой AS$a" "removed by button AS$a")"; }; unlock
-    screen_list; scr_edit $MID "${nm:+$(L "✅ $nm теперь через VPN." "✅ $nm now goes via VPN.")
+    ok="${nm:+$(L "✅ $nm теперь через VPN." "✅ $nm now goes via VPN.")
 
-}" ;;
+}"; screen_list; scr_edit $MID "$ok" ;;
   service_del) i=$1; MID=$2; l=$(services | awk -F'|' -v i="$i" '$1==i'); nm=$(echo "$l" | cut -d'|' -f2); lock 600 || busy
     if [ -n "$l" ]; then
       for a in $(echo "$l" | cut -d'|' -f3); do allow_del $a "$nm"; done
       for d in $(echo "$l" | cut -d'|' -f4); do site_del $d; done
       [ -n "$(echo "$l" | cut -d'|' -f3)" ] && refresh "$(L "убрано кнопкой: $nm" "removed by button: $nm")"
-    fi; unlock; screen_list; scr_edit $MID "${nm:+$(L "✅ $nm теперь через VPN." "✅ $nm now goes via VPN.")
+    fi; unlock; ok="${nm:+$(L "✅ $nm теперь через VPN." "✅ $nm now goes via VPN.")
 
-}" ;;
+}"; screen_list; scr_edit $MID "$ok" ;;
   device) mac=$1; MID=$2; is_mac $mac || exit 0
     line=$(device_list | awk -v m=$mac '$1==m'); [ -z "$line" ] && { screen_devices; scr_edit $MID "$(L '✅ Это устройство сейчас без VPN в Keenetic.' '✅ This device has no VPN in Keenetic right now.')
 

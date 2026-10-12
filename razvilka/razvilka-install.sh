@@ -1,5 +1,5 @@
 #!/bin/sh
-# Razvilka — installer for Keenetic (Entware). v0.7
+# Razvilka — installer for Keenetic (Entware). v0.8
 # Razvilka — installer for Keenetic routers (Entware).
 #
 #   sh razvilka-install.sh               — install or update

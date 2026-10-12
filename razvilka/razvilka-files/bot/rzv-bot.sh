@@ -273,7 +273,7 @@ site_card() {   # domain → card; card data is kept in kv card
   [ -z "$ip" ] && { send "$(L "Не нашёл сайт $d. Проверь адрес — например, rustore.ru" "Could not find the site $d. Check the address — for example, example.com")" "$MAIN_KB"; return; }
   set -- $(owner $ip); asn=$1; cc=$2; shift 2; holder="$*"; [ "$cc" = - ] && cc=''; [ "$holder" = - ] && holder=''
   kv_set card "$d $asn $holder"; kv_del await
-  dco=0; [ -s $R_FILE ] && awk "$NET2INT"' BEGIN{x=ip2n(IP)} {rng($1); if(x>=S&&x<=E){f=1; exit}} END{exit !f}' IP=$ip $R_FILE && dco=1
+  dco=0; [ -s $R_FILE ] && awk -v IP=$ip "$NET2INT"' BEGIN{x=ip2n(IP)} {rng($1); if(x>=S&&x<=E){f=1; exit}} END{exit !f}' $R_FILE && dco=1
   dgeo=0; ipset test DR_GEO_$GROUP $ip 2>&1 | grep -q 'is in set' && dgeo=1
   ddom=0; ipset test _NDM_OGDN_4_@$GROUP $ip 2>&1 | grep -q 'is in set' && ddom=1
   den=0; { asn_in $DENY $asn || echo "$holder" | grep -qiE "$HOSTING_RE"; } && den=1

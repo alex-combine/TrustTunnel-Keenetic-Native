@@ -16,6 +16,11 @@
   recommend tracker.ru (RU) and healthchecks.io (EN): a test on 12.10.2026 showed that OKchecker does not
   turn 3 hours of silence into an alarm. The morning summary says every day when the watchdog last heard
   from the router.
+- **Fixes found by an acceptance run on a live router** (all three were there since v2.3.0):
+  «Send direct» always answered «Could not add the site» although the site was added (`log` returned 1);
+  after removing an exception the bot named another site (the list screen reused the variable);
+  the «already in the country map» check never matched (`awk IP=…` is not set in `BEGIN`, now `-v`),
+  so hints could suggest companies that already go direct and the site card missed company exceptions.
 - **Hints work again:** the group is written as «@policy» (every device with a VPN policy), and the hint
   check took that word for a device name, so it never found a single connection. Now it reads the group
   like direct-routes.sh does.

@@ -45,7 +45,7 @@ SCR=$W/scr.txt; SKB=$W/scr.kb
 en() { [ "$BOTLANG" = en ]; }
 L() { if en; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
 
-log() { echo "$(date '+%F %T') $*" >> $LOG; [ "$(wc -c < $LOG)" -gt 200000 ] && { tail -n 800 $LOG > $LOG.t; mv $LOG.t $LOG; }; }
+log() { echo "$(date '+%F %T') $*" >> $LOG; [ "$(wc -c < $LOG)" -gt 200000 ] && { tail -n 800 $LOG > $LOG.t; mv $LOG.t $LOG; }; return 0; }   # always 0: callers end with log
 mem_kb() { awk '/MemAvailable/{print $2}' /proc/meminfo; }
 now() { date +%s; }
 
