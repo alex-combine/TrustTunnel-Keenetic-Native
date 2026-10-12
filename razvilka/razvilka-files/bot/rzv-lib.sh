@@ -162,7 +162,7 @@ hc_ping() {   # hc_ping [/fail] — signal to the watchdog THROUGH THE TUNNEL (V
   [ -s $HC_URL ] || return 1
   u=$(cat $HC_URL); s=${1:-}
   case "$u$s" in *cronitor.link*/fail) s='?state=fail';; *okchecker.ru*/fail) s='?status=fail';; esac   # alert: Cronitor ?state=fail, OKchecker ?status=fail, healthchecks /fail
-  curl -s -o /dev/null --interface $TUN --max-time 10 --retry 1 "$u$s" && kv_set hc_ok $(now)
+  curl -sf -o /dev/null --interface $TUN --max-time 10 --retry 1 "$u$s" && kv_set hc_ok $(now)   # -f: a wrong link (404) is not a signal
 }
 # Can the watchdog service take an explicit alarm? Tracker.ru cannot: it alarms only on silence.
 hc_can_fail() { case "$(cat $HC_URL 2>/dev/null)" in *hc-ping.com*|*healthchecks*|*cronitor.link*|*okchecker.ru*) return 0;; esac; return 1; }
@@ -177,11 +177,15 @@ hc_paused() { [ "$(kv_get hc_pause 0)" -gt "$(now)" ]; }   # «silence test» is
 # Marks of the policies whose route goes into the VPN tunnel (learned while the VPN works: when it is
 # down, the firmware may drop the route). Other policies (e.g. «via the second ISP») are not touched.
 vpn_marks() { ip rule 2>/dev/null | awk '$2 == "from" && $3 == "all" && $4 == "fwmark" && $6 == "lookup" {sub("/.*", "", $5); print $5, $7}' |
-  while read -r m t; do ip route show table "$t" 2>/dev/null | grep -qE "^default .* dev $TUN( |$)" && echo "$m"; done | sort -u | tr '\n' ' '; }
+  while read -r m t; do ip route show table "$t" 2>/dev/null | grep -qE "^default( .*)? dev $TUN( |$)" && echo "$m"; done | sort -u | tr '\n' ' '; }
 # Devices with a VPN policy: MAC addresses marked with one of the learned VPN marks.
 policy_macs() { iptables -t mangle -S _NDM_HOTSPOT_PREROUTING_MANGL 2>/dev/null | grep -i 'set-xmark' |
   awk -v marks=" $(kv_get vpn_marks) " '{m = ""; x = ""; for (i = 1; i < NF; i++) { if ($i == "--mac-source") m = tolower($(i + 1)); if ($i == "--set-xmark") { x = $(i + 1); sub("/.*", "", x) } }
     if (m != "" && x != "" && index(marks, " " x " ")) print m}' | sort -u; }
+kn() { v=$(kv_get "$1" 0); case "$v" in ''|*[!0-9]*) echo 0;; *) echo "$v";; esac; }   # numeric kv value, 0 if broken
+heal_known() {   # does the self-healing know how to restart this VPN connection?
+  [ -n "$VPN_NDM" ] && return 0
+  case "$TUN" in opkgtun*) [ -x /opt/etc/init.d/S99trusttunnel ];; nwg*) return 0;; *) return 1;; esac; }
 qadd() { printf '%s %s\n' "$(now)" "$(printf '%s' "$1" | head -c 600 | tr '\n' ' ')" >> $QUEUE; }   # to the bot later, when the connection is back
 is_num() { case "$1" in ''|*[!0-9]*) return 1;; esac; return 0; }
 is_mac() { printf '%s' "$1" | grep -qE '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$'; }

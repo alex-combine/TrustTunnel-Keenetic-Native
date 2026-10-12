@@ -148,7 +148,12 @@ fuse_rules_off() {
   done
 }
 fuse_on()  { fuse_rules_on && kv_set fuse_on $(now); }
-fuse_off() { fuse_rules_off; kv_del fuse_on; }
+fuse_off() { kv_del fuse_on; fuse_rules_off; }   # flag first: the netfilter hook must not put the rules back
+fuse_present() { iptables -w -S INPUT 2>/dev/null | grep -q -- "-j $FUSE_CH"; }
+fuse_sync() {   # every minute: the rules follow the flag, both ways (hook races, firmware rebuilds, a broken flag)
+  if [ "$(kn fuse_on)" -gt 0 ]; then fuse_present || fuse_rules_on
+  elif fuse_present; then fuse_rules_off; log "предохранитель DNS: правила остались без флага — убрал"; fi
+}
 heal_vpn() {   # restart the VPN connection → prints what was restarted
   id=$VPN_NDM
   if [ -z "$id" ]; then case "$TUN" in
@@ -158,32 +163,34 @@ heal_vpn() {   # restart the VPN connection → prints what was restarted
   [ -n "$id" ] || return 1
   ndmc -c "interface $id down" >/dev/null 2>&1; sleep 5; ndmc -c "interface $id up" >/dev/null 2>&1; echo "$id"
 }
-guard() {
-  [ "$GUARD" = 1 ] || return 0
-  t=$(now); fo=$(kv_get fuse_on 0)
+guard() { guard_step; fuse_sync; }
+guard_step() {
+  t=$(now); fo=$(kn fuse_on)
+  if [ "$GUARD" != 1 ] || [ "$FUSE" != 1 ]; then   # turned off in net.conf: never leave the fuse behind
+    [ "$fo" -gt 0 ] && { fuse_off; log "предохранитель DNS снят: он выключен в net.conf"; }
+    fo=0; [ "$GUARD" = 1 ] || return 0
+  fi
   if [ "$fo" -gt 0 ] && [ $((t - fo)) -ge 1800 ]; then
     fuse_off; kv_set g_fail 0; log "предохранитель DNS снят по таймеру (30 мин), проверяю VPN заново"; return 0
   fi
   if vpn_ok; then
-    kv_set g_fail 0; ok=$(( $(kv_get g_ok 0) + 1 )); kv_set g_ok $ok
-    vm=$(vpn_marks); [ -n "$vm" ] && [ "$vm" != "$(kv_get vpn_marks)" ] && kv_set vpn_marks "$vm"
+    kv_set g_fail 0; ok=$(( $(kn g_ok) + 1 )); kv_set g_ok $ok
+    vm=$(vpn_marks); [ "$vm" != "$(kv_get vpn_marks)" ] && kv_set vpn_marks "$vm"   # a policy moved off the VPN is forgotten too
     [ "$fo" -gt 0 ] && [ $ok -ge 2 ] && { fuse_off; log "VPN снова пропускает данные — предохранитель DNS снят"; }
     [ -n "$(kv_get heal_step)" ] && { kv_del heal_step; log "самолечение помогло — VPN снова пропускает данные"; }
     return 0
   fi
-  kv_set g_ok 0; f=$(( $(kv_get g_fail 0) + 1 )); kv_set g_fail $f
-  if [ $f -eq 3 ]; then
-    [ "$FUSE" = 1 ] && [ "$fo" = 0 ] && fuse_on && log "VPN не пропускает данные 3 мин — устройствам с VPN-политикой сразу отказ DNS (предохранитель)"
-    if [ "$HEAL" = 1 ] && [ $((t - $(kv_get heal_at 0))) -ge 1800 ]; then
+  kv_set g_ok 0; f=$(( $(kn g_fail) + 1 )); kv_set g_fail $f
+  [ $f -eq 3 ] && [ "$FUSE" = 1 ] && [ "$fo" = 0 ] && fuse_on && log "VPN не пропускает данные 3 мин — устройствам с VPN-политикой сразу отказ DNS (предохранитель)"
+  if [ $f -ge 3 ]; then   # the restart repeats every 30 minutes while the outage lasts
+    if [ "$HEAL" = 1 ] && [ $((t - $(kn heal_at))) -ge 1800 ]; then
       if h=$(heal_vpn); then kv_set heal_at $t; kv_set heal_step 1; log "самолечение: перезапустил VPN ($h)"
         qadd "$(L "🛠 VPN перестал пропускать данные — я перезапустил подключение ($h)." "🛠 The VPN stopped passing data — I restarted the connection ($h).")"
-      else log "самолечение: не знаю, как перезапустить $TUN — впиши имя подключения в net.conf: VPN_NDM=…"; fi
+      else [ $f -eq 3 ] && log "самолечение: не знаю, как перезапустить $TUN — впиши имя подключения в net.conf: VPN_NDM=…"; fi
+    elif [ "$(kv_get heal_step)" = 1 ] && [ $((t - $(kn heal_at))) -ge 180 ] && [ -x $ETC/heal2.sh ]; then   # 3 minutes after a restart
+      kv_set heal_step 2; log "самолечение, шаг 2: запускаю свой сценарий heal2.sh"; $ETC/heal2.sh >/dev/null 2>&1
     fi
-  elif [ $f -eq 6 ] && [ "$(kv_get heal_step)" = 1 ] && [ -x $ETC/heal2.sh ]; then
-    kv_set heal_step 2; log "самолечение, шаг 2: запускаю свой сценарий heal2.sh"; $ETC/heal2.sh >/dev/null 2>&1
   fi
-  # the firmware may rebuild the filter table: put the fuse back
-  [ "$(kv_get fuse_on 0)" -gt 0 ] && ! iptables -w -S INPUT 2>/dev/null | grep -q -- "-j $FUSE_CH" && fuse_rules_on
   return 0
 }
 
@@ -193,8 +200,8 @@ checks() {
   p=$(kv_get hc_pause 0)
   if [ "$p" -gt 0 ] && [ $t -ge $p ]; then kv_del hc_pause; log 'сторож: тест молчания окончен'
     send "$(L '🤫 Тест молчания окончен, сигналы сторожу снова идут.
-Пришла тревога от сторожа (письмо, MAX или Telegram)? Если да — всё настроено правильно. Если нет — этот сервис тишину не ловит: возьми другой (⚙️ Настройки → 🕰 Сторож).' '🤫 The silence test is over, signals go to the watchdog again.
-Did the watchdog alarm reach you (email or Telegram)? If yes — everything is set up right. If not — this service does not catch silence: take another one (⚙️ Settings → 🕰 Watchdog).')"; fi
+Пришла тревога от сторожа (письмо, MAX или Telegram)? Если да — всё настроено правильно. Если нет — этот сервис тишину не ловит: возьми другой (⚙️ Настройки → 🕰 Сторож связи).' '🤫 The silence test is over, signals go to the watchdog again.
+Did the watchdog alarm reach you (email or Telegram)? If yes — everything is set up right. If not — this service does not catch silence: take another one (⚙️ Settings → 🕰 Connection watchdog).')"; fi
   if vpn_ok; then
     hc_paused || hc_ping                     # "I am alive" to the watchdog (if enabled); through the tunnel
     kv_del hc_failsent
@@ -233,15 +240,15 @@ What you can do:
   if geo_on; then kv_del geo_off_since
   else os=$(kv_get geo_off_since); [ -z "$os" ] && { kv_set geo_off_since $t; os=$t; }
     if [ $((t-os)) -gt 86400 ] && [ $(( t - $(kv_get geo_off_remind 0) )) -gt 86400 ]; then
-      : > $SKB; row "$(flag) $(L 'Включить' 'Turn on')" geo "$(L 'Оставить' 'Keep')" set
+      : > $SKB; row "$(flag) $(L 'Включить' 'Turn on')" geo:on "$(L 'Оставить' 'Keep')" set
       send "$(L '⚪ Напоминаю: «Своя страна напрямую» выключена уже сутки — всё идёт через VPN. Включить?' '⚪ A reminder: «Home country direct» has been off for a day — everything goes via VPN. Turn it on?')" "$(kb_json $SKB)"; kv_set geo_off_remind $t; fi; fi
-  if [ -s $HC_URL ] && ! hc_paused && [ $(( t - $(kv_get hc_ok $t) )) -gt 2400 ] && [ $(( t - $(kv_get hc_alert 0) )) -gt 86400 ]; then
-    send "$(L '🟡 Сторож давно не получает сигналов от роутера. Проверь ссылку в ⚙️ Настройки → 🕰 Сторож или нажми 🧪 Тест тревоги.' '🟡 The watchdog has not received signals from the router for a long time. Check the link in ⚙️ Settings → 🕰 Watchdog or press 🧪 Test alarm.')"; kv_set hc_alert $t; fi
+  if [ -s $HC_URL ] && ! hc_paused && [ $(( t - $(kv_get hc_ok $t) )) -gt 2400 ] && [ $(( t - $(kv_get hc_alert 0) )) -gt 86400 ] && vpn_ok; then
+    send "$(L '🟡 Сторож связи давно не получает сигналов от роутера, хотя VPN работает. Проверь ссылку: ⚙️ Настройки → 🕰 Сторож связи.' '🟡 The connection watchdog has not received signals from the router for a long time, although the VPN works. Check the link: ⚙️ Settings → 🕰 Connection watchdog.')"; kv_set hc_alert $t; fi
   if [ "$(kv_get digest 1)" = 1 ] && [ "$(date +%H)" = 09 ] && [ "$(kv_get digest_day)" != "$(today)" ]; then
     kv_set digest_day "$(today)"; screen_status
     HCL=''; [ -s $HC_URL ] && HCL="
 
-$(L "🕰 Сторож на связи, последний сигнал $(ago "$(kv_get hc_ok 0)")." "🕰 Watchdog is in touch, last signal $(ago "$(kv_get hc_ok 0)").")"
+$(L "🕰 Сторож связи на посту, последний сигнал $(ago "$(kv_get hc_ok 0)")." "🕰 Watchdog is in touch, last signal $(ago "$(kv_get hc_ok 0)").")"
     if head -1 $SCR | grep -q '^✅'; then : > $SKB; row "$(L 'Подробнее' 'Details')" det; send "$(L '☀️ Доброе утро! Дома всё работает.' '☀️ Good morning! Everything at home works.')$HCL" "$(kb_json $SKB)"
     else send "$(L '☀️ Доброе утро!' '☀️ Good morning!')
 
@@ -255,7 +262,7 @@ case "$A" in
   checks) QUEUE_ON_FAIL=1; checks ;;
   guard)  mkdir $TMP/guard.lock 2>/dev/null || { [ -n "$(find $TMP/guard.lock -mmin +5 2>/dev/null)" ] && rmdir $TMP/guard.lock; exit 0; }
           guard; rmdir $TMP/guard.lock ;;
-  fuse_apply) [ "$(kv_get fuse_on 0)" -gt 0 ] && fuse_rules_on; exit 0 ;;
+  fuse_apply) [ "$GUARD" = 1 ] && [ "$FUSE" = 1 ] && [ "$(kn fuse_on)" -gt 0 ] && fuse_rules_on; exit 0 ;;
   fuse_off) fuse_off; exit 0 ;;
   watch)  lock 60 || exit 0; watch; unlock ;;
   refresh) QUEUE_ON_FAIL=1; lock 600 || exit 0; refresh "$(L 'сверка' 'check')" "$@"; unlock ;;
@@ -313,8 +320,9 @@ It works for devices that ask the router for addresses.")"; else res="$(L '😕 
     screen_devices; scr_edit $MID "✅ $res
 
 " ;;
-  geo) MID=$1
-    if geo_on; then lock 120 || busy; $GEO_SH off >/dev/null 2>&1; unlock; log 'своя страна → выкл'
+  geo) MID=$1; w=$2; [ -n "$w" ] || { geo_on && w=off || w=on; }
+    if { [ $w = off ] && ! geo_on; } || { [ $w = on ] && geo_on; }; then screen_settings; scr_edit $MID; exit 0; fi   # already so (a double tap)
+    if [ $w = off ]; then lock 120 || busy; $GEO_SH off >/dev/null 2>&1; unlock; log 'своя страна → выкл'
       screen_settings; scr_edit $MID "$(L '✅ «Своя страна напрямую» выключена. Остались только твои исключения.' '✅ «Home country direct» is off. Only your exceptions are left.')
 
 "

@@ -6,7 +6,8 @@
   devices with a VPN policy get an instant «no DNS» (the DNS fuse: REJECT on port 53, IPv4 and IPv6 —
   nothing leaks to the ISP, no retry storm, no conntrack pile-up), and the VPN connection is restarted
   (TrustTunnel — `S99trusttunnel reload`, WireGuard — `interface WireguardN down/up`, others — `VPN_NDM=`
-  in `net.conf`), at most once in 30 minutes. 6 minutes — optional own script `heal2.sh`. The fuse comes off
+  in `net.conf`), every 30 minutes while the outage lasts; 3 minutes after a restart that did not help —
+  optional own script `heal2.sh`. Every minute the rules are checked against the fuse flag both ways. The fuse comes off
   after 2 good checks or by itself in 30 minutes; a netfilter hook puts it back after the firmware rebuilds
   the filter table. `GUARD=0` / `FUSE=0` / `HEAL=0` in `net.conf` turn it off.
 - **Watchdog:** when the router is alive but the VPN is not, services that take explicit alarms
@@ -15,6 +16,11 @@
   recommend tracker.ru (RU) and healthchecks.io (EN): a test on 12.10.2026 showed that OKchecker does not
   turn 3 hours of silence into an alarm. The morning summary says every day when the watchdog last heard
   from the router.
+- **Clearer bot settings:** ✅/⬜ are switches (a tap switches at once), «→» opens its own screen, «…» asks
+  first. Turning off «Home country direct», erasing the hint history and turning the watchdog off now ask
+  for confirmation (Cancel comes first). The watchdog is called «Connection watchdog»; the status screen no
+  longer tells you to reboot the router while it restarts the VPN by itself; no more references to
+  «🧪 Test alarm» where the service has none.
 - Installer 0.8: the `guard` cron line and the `57-razvilka-fuse.sh` hook; removal takes the fuse off.
 
 ## v2.3.2 — the router does not choke when the VPN drops at night

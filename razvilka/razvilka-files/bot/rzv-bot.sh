@@ -44,8 +44,10 @@ device_list() {   # "mac strict(0/1) name"
 # ---------- screens ----------
 screen_status() {   # [det]
   mem=$(( $(mem_kb) / 1024 )); vpn=0; vpn_ok && vpn=1; on=0; geo_on && on=1; p=''
-  [ $vpn = 0 ] && p="$p
-$(L '🔴 VPN не отвечает — заграничные сайты могут не открываться. Если не пройдёт за 10 минут, перезагрузи роутер.' '🔴 VPN is not answering — foreign sites may not open. If it does not pass in 10 minutes, reboot the router.')"
+  if [ $vpn = 0 ]; then if [ "$GUARD" = 1 ] && [ "$HEAL" = 1 ] && heal_known; then p="$p
+$(L '🔴 VPN не отвечает — на устройствах с VPN сайты могут не открываться. Роутер сам перезапустит VPN в ближайшие минуты, перезагружать его не нужно. Если не пройдёт за 15 минут — тогда перезагрузи роутер.' '🔴 VPN is not answering — sites may not open on devices with VPN. The router restarts the VPN by itself within minutes, no need to reboot it. If it does not pass in 15 minutes — then reboot the router.')"
+  else p="$p
+$(L '🔴 VPN не отвечает — заграничные сайты могут не открываться. Если не пройдёт за 10 минут, перезагрузи роутер.' '🔴 VPN is not answering — foreign sites may not open. If it does not pass in 10 minutes, reboot the router.')"; fi; fi
   [ $mem -lt 15 ] && p="$p
 $(L "🟡 Роутеру тесно: свободно $mem МБ. Обычно проходит само." "🟡 The router is short on memory: $mem MB free. It usually passes by itself.")"
   geo_stale && p="$p
@@ -168,22 +170,39 @@ $f — своя страна напрямую: банки, госуслуги, �
     set -- "$@" "$i $(printf '%s' "$nm" | cut -c1-18)" "dev:$m"; [ $# -ge 4 ] && { row "$@"; set --; }
   done < $W/dev; [ $# -ge 2 ] && row "$@"
 }
+box() { if [ "$1" = 1 ]; then printf '✅'; else printf '⬜'; fi; }   # a switch: tap = switch at once
 screen_settings() {
-  ON=$(L вкл on); OFF=$(L выкл off)
-  geo_on && g=$ON || g=$OFF; [ "$(kv_get digest 1)" = 1 ] && dg=$ON || dg=$OFF; [ -f $HINTS_OFF ] && h=$OFF || h=$ON; f=$(flag)
+  g=0; geo_on && g=1; [ -n "$GEO_FORCE" ] && g=1; dg=$(kv_get digest 1); h=1; [ -f $HINTS_OFF ] && h=0; f=$(flag)
   if en; then scr "⚙️ Settings
 
+✅ — on, tap to turn off · ⬜ — off, tap to turn on
+→ — opens its own screen · … — asks first
+
 $f Home country ($(cname)) direct — the main rule. Turn it off — and everything goes via VPN.
+☀️ Morning summary — a short report every morning.
 💡 Hints — if something from your home country goes via VPN, Razvilka will offer to let it go direct. For that it looks at where devices connected; the history can be erased.
+🕰 Connection watchdog — sends an alarm when the router or the VPN goes silent.
 ↩️ Undo to yesterday — if something stopped opening after changes."
   else scr "⚙️ Настройки
 
+✅ — включено, нажми, чтобы выключить · ⬜ — выключено, нажми, чтобы включить
+→ — откроет отдельный экран · … — сначала спрошу
+
 $f Своя страна ($(cname)) напрямую — главное правило. Выключишь — всё пойдёт через VPN.
+☀️ Утренняя сводка — короткий отчёт каждое утро.
 💡 Подсказки — если что-то из своей страны идёт через VPN, Развилка предложит пустить напрямую. Для этого она смотрит, куда ходили устройства; историю можно стереть.
+🕰 Сторож связи — пришлёт тревогу, если роутер или VPN замолчит.
 ↩️ Вернуть как было вчера — если после изменений что-то перестало открываться."; fi
-  row "$f $(L 'Своя страна напрямую' 'Home country direct') — ${GEO_FORCE:-$g}" geo; row "☀️ $(L 'Утренняя сводка' 'Morning summary') — $dg" dg
-  row "💡 $(L 'Подсказки' 'Hints') — $h" hint "$(L '🧹 Стереть историю' '🧹 Erase history')" hclr; row "$(L '↩️ Вернуть как было вчера' '↩️ Undo to yesterday')" rb:ask
-  [ -s $HC_URL ] && hc=$ON || hc=$OFF; row "🕰 $(L 'Сторож' 'Watchdog') — $hc" hc
+  q=''; [ $g = 1 ] && q='…'; row "$(box $g) $f $(L 'Своя страна напрямую' 'Home country direct')$q" geo
+  row "$(box $dg) ☀️ $(L 'Утренняя сводка' 'Morning summary')" dg
+  row "$(box $h) 💡 $(L 'Подсказки' 'Hints')" hint
+  if [ -s $HC_URL ]; then hc=$(L 'включён' 'on'); else hc=$(L 'выключен' 'off'); fi
+  row "🕰 $(L 'Сторож связи' 'Connection watchdog'): $hc →" hc
+  row "$(L '🧹 Стереть историю подсказок…' '🧹 Erase hint history…')" hclr
+  row "$(L '↩️ Вернуть как было вчера…' '↩️ Undo to yesterday…')" rb:ask
+}
+ask() {   # ask "question" "yes label" yes_callback — «Cancel» comes first, so a quick tap does no harm
+  scr "$1"; row "$(L '« Отмена' '« Cancel')" set "$2" "$3"
 }
 screen_hc() {
   if [ -s $HC_URL ]; then
@@ -192,12 +211,12 @@ screen_hc() {
     pz=''; hc_paused && pz="
 
 $(L "🤫 Идёт тест молчания до $(date -d "@$(kv_get hc_pause)" +%H:%M): тревога от сторожа должна прийти минут через 20." "🤫 A silence test is running until $(date -d "@$(kv_get hc_pause)" +%H:%M): the watchdog alarm should come in about 20 minutes.")"
-    if en; then scr "🕰 Watchdog is on
+    if en; then scr "🕰 Connection watchdog is on
 
 Every 5 minutes the router tells the watchdog «I am alive» through the VPN. If the signals stop (VPN down, no power or internet), the watchdog sends you an alarm by itself.$fl
 
 Last signal: $last.$pz"
-    else scr "🕰 Сторож включён
+    else scr "🕰 Сторож связи включён
 
 Каждые 5 минут роутер через VPN говорит сторожу «я жив». Если сигналы пропадут (упал VPN, нет света или интернета) — сторож сам пришлёт тревогу.$fl
 
@@ -205,9 +224,9 @@ Last signal: $last.$pz"
     if hc_paused; then row "$(L '⏹ Прервать тест молчания' '⏹ Stop the silence test')" hcsilx
     else row "$(L '🤫 Тест молчания (30 мин)' '🤫 Silence test (30 min)')" hcsil; fi
     hc_can_fail && row "$(L '🧪 Тест тревоги' '🧪 Test alarm')" hct
-    row "$(L '❌ Выключить сторожа' '❌ Turn watchdog off')" hcoff; row "$(L '« Назад' '« Back')" set
+    row "$(L '❌ Выключить сторожа…' '❌ Turn watchdog off…')" hcoff; row "$(L '« Назад' '« Back')" set
   else
-    if en; then scr "🕰 Watchdog — a «dead man’s hand»
+    if en; then scr "🕰 Connection watchdog — a «dead man’s hand»
 
 When the router loses VPN or power, Telegram at home may go silent too — and there is no one to tell you. The watchdog is an outside service: the router tells it «I am alive» every 5 minutes, and if the signals stop, the watchdog sends you an alarm. It reaches you without VPN.
 
@@ -221,7 +240,7 @@ How to turn it on (5 minutes, free):
 tracker.ru and cronitor.io work too — check with the silence test that the alarm reaches you.
 
 The link is like a key: do not show it to anyone. I will delete your message from the chat right after saving it."
-    else scr "🕰 Сторож — «мёртвая рука»
+    else scr "🕰 Сторож связи — «мёртвая рука»
 
 Когда у роутера пропадает VPN или свет, Telegram у тебя дома тоже может замолчать — и сказать об этом некому. Сторож — внешний сервис: роутер каждые 5 минут говорит ему «я жив», а если сигналы пропали — сторож сам присылает тревогу. Она доходит и без VPN.
 
@@ -291,8 +310,8 @@ on_message() {
       [ "$MSGID" != 0 ] && del_msg $MSGID                  # do not leave the secret in the chat
       u=$(printf '%s' "${TEXT#/storozh}" | tr -d ' \t' | head -c 220)
       if hc_ok_url "$u"; then ( umask 077; printf '%s' "$u" > $HC_URL ); log 'сторож: ссылка сохранена'
-        if hc_ping; then send "$(L '✅ Сторож включён: первый сигнал дошёл. Дальше роутер сам будет отмечаться каждые 5 минут.' '✅ Watchdog is on: the first signal got through. From now on the router checks in by itself every 5 minutes.')" "$MAIN_KB"
-        else send "$(L '🟡 Ссылку сохранил, но первый сигнал не дошёл. Проверь ссылку или нажми 🧪 Тест тревоги в ⚙️ Настройки → 🕰 Сторож.' '🟡 Link saved, but the first signal did not get through. Check the link or press 🧪 Test alarm in ⚙️ Settings → 🕰 Watchdog.')" "$MAIN_KB"; fi
+        if hc_ping; then send "$(L '✅ Сторож связи включён: первый сигнал дошёл. Дальше роутер сам будет отмечаться каждые 5 минут.' '✅ Watchdog is on: the first signal got through. From now on the router checks in by itself every 5 minutes.')" "$MAIN_KB"
+        else send "$(L '🟡 Ссылку сохранил, но первый сигнал не дошёл. Проверь ссылку и пришли её ещё раз: /storozh ссылка. Если VPN сейчас не работает — сигнал уйдёт сам, когда он оживёт.' '🟡 Link saved, but the first signal did not get through. Check the link and send it again: /storozh link. If the VPN is down right now, the signal will go by itself when it is back.')" "$MAIN_KB"; fi
       else send "$(L 'Не похоже на ссылку сторожа 🤔
 Пришли так: /storozh https://hb.tracker.ru/ping/…' 'This does not look like a watchdog link 🤔
 Send it like this: /storozh https://hc-ping.com/…')" "$MAIN_KB"; fi ;;
@@ -308,7 +327,7 @@ The rule is simple: everything in your home country goes direct, everything else
 📊 Status — is everything OK
 🔎 Site — where a site goes, and change it
 📱 Devices — which rule for whom
-⚙️ Settings — country, summary, hints, undo
+⚙️ Settings — country, summary, hints, connection watchdog, undo
 
 If something breaks, I will write to you myself.' "$MAIN_KB"
        else send '🔀 Я Развилка — делю домашний интернет на две дороги.
@@ -318,7 +337,7 @@ If something breaks, I will write to you myself.' "$MAIN_KB"
 📊 Статус — всё ли в порядке
 🔎 Сайт — куда идёт сайт, и поменять
 📱 Устройства — кому какое правило
-⚙️ Настройки — страна, сводка, подсказки, откат
+⚙️ Настройки — страна, сводка, подсказки, сторож связи, откат
 
 Если что-то сломается — я напишу сама.' "$MAIN_KB"; fi ;;
   esac
@@ -349,11 +368,22 @@ on_callback() {
     dg) if [ "$(kv_get digest 1)" = 1 ]; then kv_set digest 0; toast "$CQ" "$(L 'Сводка выключена' 'Summary off')"; else kv_set digest 1; toast "$CQ" "$(L 'Сводка включена' 'Summary on')"; fi
         screen_settings; scr_edit $MID ;;
     hint) [ -f $HINTS_OFF ] && rm -f $HINTS_OFF || : > $HINTS_OFF; toast "$CQ" "$(L 'Готово' 'Done')"; screen_settings; scr_edit $MID ;;
-    hclr) : > $CACHE_IP; : > $HINTED; log 'история подсказок стёрта'; toast "$CQ" "$(L 'История стёрта' 'History erased')"
+    hclr) toast "$CQ"; ask "$(L '🧹 Стереть историю подсказок?
+
+Развилка забудет, куда ходили устройства, и какие подсказки уже показывала. Твои исключения и настройки не изменятся. Вернуть историю нельзя.' '🧹 Erase the hint history?
+
+Razvilka will forget where devices connected and which hints it already showed. Your exceptions and settings will not change. The history cannot be brought back.')" "$(L '🧹 Стереть' '🧹 Erase')" hclr:yes; scr_edit $MID ;;
+    hclr:yes) : > $CACHE_IP; : > $HINTED; log 'история подсказок стёрта'; toast "$CQ" "$(L 'История стёрта' 'History erased')"
           screen_settings; scr_edit $MID "$(L '🧹 История подсказок стёрта.' '🧹 Hint history erased.')
 
 " ;;
-    geo) toast "$CQ" "$(L 'Готово' 'Done')"; act geo $MID & ;;
+    geo|geo:on) if [ "$DATA" = geo ] && geo_on; then toast "$CQ"; ask "$(L "$(flag) Выключить «Своя страна напрямую»?
+
+Сайты своей страны (банки, госуслуги, местные сервисы) пойдут через VPN — некоторые из них могут не пустить. Включить обратно можно здесь же, сборка займёт около двух минут." "$(flag) Turn off «Home country direct»?
+
+Sites of your home country (banks, government, local services) will go via VPN — some of them may refuse. You can turn it back on here, the build takes about two minutes.")" "$(L 'Выключить' 'Turn off')" geo:off; scr_edit $MID
+         else toast "$CQ" "$(L 'Включаю…' 'Turning on…')"; act geo $MID on & fi ;;
+    geo:off) toast "$CQ" "$(L 'Выключаю…' 'Turning off…')"; act geo $MID off & ;;
     lite) toast "$CQ" "$(L 'Включаю…' 'Turning on…')"; act lite $MID & ;;
     rb:ask) toast "$CQ"; scr "$(L '↩️ Вернуть карту страны и сети исключений такими, какими они были до последнего обновления?
 
@@ -362,16 +392,22 @@ on_callback() {
 Devices and your sites will not change.')"; row "$(L '↩️ Вернуть как было' '↩️ Undo')" rb:yes "$(L 'Оставить' 'Keep')" set; scr_edit $MID ;;
     rb:yes) toast "$CQ" "$(L 'Возвращаю…' 'Undoing…')"; act rollback $MID & ;;
     hc) toast "$CQ"; screen_hc; scr_edit $MID ;;
-    hct) if hc_ping /fail; then toast "$CQ" "$(L 'Отправил' 'Sent')"; screen_hc; scr_edit $MID "$(L '🧪 Отправил сторожу «тревога». Сейчас придёт письмо о тревоге, а через 5 минут — «снова в порядке».' '🧪 Sent «alarm» to the watchdog. An alarm email will come now, and in 5 minutes — «back to normal».')
+    hct) if hc_ping /fail; then toast "$CQ" "$(L 'Отправил' 'Sent')"; screen_hc; scr_edit $MID "$(L '🧪 Отправил сторожу «тревога». Сейчас придёт тревога, а через 5 минут — «снова в порядке».' '🧪 Sent «alarm» to the watchdog. An alarm will come now, and in 5 minutes — «back to normal».')
 
 "; else toast "$CQ" "$(L 'Сторож не ответил' 'Watchdog did not answer')"; fi ;;
-    hcsil) kv_set hc_pause $(( $(now) + 1800 )); log 'сторож: тест молчания на 30 мин'; toast "$CQ" "$(L 'Тест начался' 'Test started')"; screen_hc
+    hcsil) [ -s $HC_URL ] || { toast "$CQ" "$(L 'Сторож связи выключен' 'Watchdog is off')"; screen_hc; scr_edit $MID; return; }
+      kv_set hc_pause $(( $(now) + 1800 )); log 'сторож: тест молчания на 30 мин'; toast "$CQ" "$(L 'Тест начался' 'Test started')"; screen_hc
       scr_edit $MID "$(L '🤫 Тест молчания начался: 30 минут роутер не подаёт сторожу сигналов. Минут через 20 сторож должен прислать тревогу. Потом сигналы вернутся сами, и я спрошу, пришла ли она.' '🤫 The silence test has started: for 30 minutes the router sends no signals to the watchdog. In about 20 minutes the watchdog should send you an alarm. Then the signals come back by themselves and I will ask whether it came.')
 
 " ;;
     hcsilx) kv_del hc_pause; hc_ping; log 'сторож: тест молчания прерван'; toast "$CQ" "$(L 'Тест прерван' 'Test stopped')"; screen_hc; scr_edit $MID ;;
-    hcoff) rm -f $HC_URL; kv_del hc_ok; kv_del hc_pause; log 'сторож выключен'; toast "$CQ" "$(L 'Сторож выключен' 'Watchdog off')"
-      screen_settings; scr_edit $MID "$(L '❌ Сторож выключен. Не забудь удалить или поставить на паузу проверку у сервиса-сторожа, иначе он пришлёт тревогу.' '❌ Watchdog is off. Remember to delete or pause the check at your watchdog service, otherwise it will send an alarm.')
+    hcoff) toast "$CQ"; ask "$(L '🕰 Выключить сторожа связи?
+
+Роутер перестанет подавать сигналы. Удали или поставь на паузу проверку у самого сервиса-сторожа — иначе минут через 20 он пришлёт тревогу.' '🕰 Turn the connection watchdog off?
+
+The router will stop sending signals. Delete or pause the check at the watchdog service itself — otherwise it will send an alarm in about 20 minutes.')" "$(L '❌ Выключить' '❌ Turn off')" hcoff:yes; scr_edit $MID ;;
+    hcoff:yes) rm -f $HC_URL; kv_del hc_ok; kv_del hc_pause; log 'сторож выключен'; toast "$CQ" "$(L 'Сторож связи выключен' 'Watchdog off')"
+      screen_settings; scr_edit $MID "$(L '❌ Сторож связи выключен. Не забудь удалить или поставить на паузу проверку у сервиса-сторожа.' '❌ The connection watchdog is off. Remember to delete or pause the check at your watchdog service.')
 
 " ;;
     add:*|skip:*) is_num "$s" && { toast "$CQ" "$(L 'Принято' 'Got it')"; act hint_${DATA%%:*} $s $MID & } ;;
@@ -382,15 +418,15 @@ Devices and your sites will not change.')"; row "$(L '↩️ Вернуть ка
 
 # ---------- once on first start (and when the language changes) ----------
 setup_once() {
-  [ "$(kv_get menu)" = "5$BOTLANG" ] && return
+  [ "$(kv_get menu)" = "6$BOTLANG" ] && return
   f=$TMP/m.json
   if en; then
-  echo '{"commands":[{"command":"start","description":"🏠 Start — buttons and what Razvilka can do"},{"command":"status","description":"📊 Status — is everything OK"},{"command":"site","description":"🔎 Site — where it goes, and change it"},{"command":"devices","description":"📱 Devices — which rule for whom"},{"command":"settings","description":"⚙️ Settings — country, summary, hints, undo"},{"command":"list","description":"📋 My exceptions — what you changed on top of the rule"}]}' > $f
+  echo '{"commands":[{"command":"start","description":"🏠 Start — buttons and what Razvilka can do"},{"command":"status","description":"📊 Status — is everything OK"},{"command":"site","description":"🔎 Site — where it goes, and change it"},{"command":"devices","description":"📱 Devices — which rule for whom"},{"command":"settings","description":"⚙️ Settings — country, summary, hints, watchdog, undo"},{"command":"list","description":"📋 My exceptions — what you changed on top of the rule"}]}' > $f
   else
-  echo '{"commands":[{"command":"start","description":"🏠 Начало — кнопки и что умеет Развилка"},{"command":"status","description":"📊 Статус — всё ли в порядке"},{"command":"site","description":"🔎 Сайт — куда идёт, и поменять"},{"command":"devices","description":"📱 Устройства — кому какое правило"},{"command":"settings","description":"⚙️ Настройки — страна, сводка, подсказки, откат"},{"command":"list","description":"📋 Мои исключения — что поменял поверх правила"}]}' > $f
+  echo '{"commands":[{"command":"start","description":"🏠 Начало — кнопки и что умеет Развилка"},{"command":"status","description":"📊 Статус — всё ли в порядке"},{"command":"site","description":"🔎 Сайт — куда идёт, и поменять"},{"command":"devices","description":"📱 Устройства — кому какое правило"},{"command":"settings","description":"⚙️ Настройки — страна, сводка, подсказки, сторож, откат"},{"command":"list","description":"📋 Мои исключения — что поменял поверх правила"}]}' > $f
   fi
   tg setMyCommands $f >/dev/null; echo '{"menu_button":{"type":"commands"}}' > $f; tg setChatMenuButton $f >/dev/null; rm -f $f
-  kv_set menu "5$BOTLANG"
+  kv_set menu "6$BOTLANG"
 }
 
 # ---------- main loop (only "rzv-bot.sh run"; rzv-act.sh sources this file for the screens) ----------

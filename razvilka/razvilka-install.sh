@@ -55,6 +55,7 @@ if [ $MODE = uninstall ]; then
   echo "  $(L 'Верну всё по списку сделанного:' 'I will undo everything from the manifest:') $R$MAN"
   ask "$(L 'Удаляем? (да/нет)' 'Remove? (yes/no)')" "$([ $YES = 1 ] && yes_word || L нет no)"; is_yes "$ANS" || { echo "  $(L 'Хорошо, ничего не меняю.' 'OK, nothing changed.')"; exit 0; }
   [ -x "$R/opt/etc/init.d/S99razvilka" ] && sys "/opt/etc/init.d/S99razvilka stop"
+  sed -i '/# razvilka:guard$/d' "$R/opt/etc/crontab" 2>/dev/null; rm -f "$R/opt/etc/ndm/netfilter.d/57-razvilka-fuse.sh"   # nothing may put the fuse back
   [ -x "$R$APP/rzv-act.sh" ] && sys "$APP/rzv-act.sh fuse_off >/dev/null 2>&1"   # take the DNS fuse off if it is on
   # walk the list from the end
   awk '{a[NR]=$0} END{for(i=NR;i>=1;i--) print a[i]}' "$R$MAN" | while read -r kind a b c; do case "$kind" in
