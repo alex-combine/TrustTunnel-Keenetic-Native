@@ -173,7 +173,6 @@ hc_fail_direct() {   # the router is alive but the VPN is not: send the alarm st
   curl -s -o /dev/null --interface $WAN --max-time 10 --retry 1 "$u$s"
 }
 hc_paused() { [ "$(kv_get hc_pause 0)" -gt "$(now)" ]; }   # «silence test» is running
-# Devices with a VPN policy in Keenetic (the same list as @policy in direct-routes)
 # Devices of the Razvilka group, as direct-routes.sh reads them: explicit MACs + @policy (every device with a
 # Keenetic policy), minus !MAC (strictly via VPN).
 group_macs() {
