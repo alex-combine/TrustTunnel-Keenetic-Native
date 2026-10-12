@@ -61,6 +61,7 @@ Everything the installer added is removed in reverse order. Answer "yes" to the 
 - **Status says the VPN is not answering.** Check the VPN connection in the Keenetic web panel; if it does not recover in 10 minutes, reboot the router. Razvilka never turns the VPN off by itself.
 - **A site does not open.** Send its address to the bot: it shows whether the site goes direct or via VPN, and you can switch it with one button. If something broke after an update, use ⚙️ Settings → ↩️ Undo to yesterday.
 - **The router is low on memory.** Turn on the «light map» (the bot offers it) or use a router with 256 MB of RAM or more.
+- **The country map was not rebuilt tonight.** The build waits for a working VPN and enough free memory; if the VPN drops during the build, it stops and tries again the next night (see `/opt/var/log/ttwatch/direct-routes.log`).
 - **The country list is not updated for days.** The router keeps using the old list. Check that the VPN works (the list is downloaded through it) and look at `/opt/var/log/razvilka.log`.
 - **The bot is silent.** Telegram is reached through your VPN, so check the VPN first. Then on the router: `/opt/etc/init.d/S99razvilka status` and `restart`. To be alerted even when the VPN is down, turn on 🕰 Watchdog in ⚙️ Settings.
 - **The router does not answer at all after installing.** The installer rolls back by itself when the VPN check fails. If you cannot reach the router, unplug the USB stick and reboot: Entware (and Razvilka with it) does not start without it.

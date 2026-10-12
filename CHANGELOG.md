@@ -1,5 +1,20 @@
 # Changelog
 
+## v2.3.2 — the router does not choke when the VPN drops at night
+
+A real night on a 128 MB router: the VPN server became unreachable during the nightly Razvilka map build,
+devices behind the kill switch retried DNS without a pause (over 2000 connections), memory went to zram,
+the load reached 65 and the router hung.
+
+- `tt-stats memguard` — **overload brake**: free memory below the threshold and a load average of
+  `MEMGUARD_LOAD` (20) or more for 2 minutes → stops heavy optional jobs (`MEMGUARD_SHED`, by default the
+  Razvilka map build) and lets short UDP conntrack entries expire in 5 s instead of 30 s for 10 minutes.
+  UDP streams (QUIC, calls) use a separate timeout and are not affected. `MEMGUARD_LOAD=0` turns it off.
+- Razvilka map build (`geo-build.sh`): does not start with less than `MIN_MEM_KB` (12000 kB) free or when the
+  VPN does not answer. If the VPN dies or memory runs low during the build, it stops going online after
+  2 failures in a row (before: a minute of waiting for every source, 20+ minutes in total), does not apply
+  the result and tries again the next night. Runs with the lowest CPU priority.
+
 ## v2.3.1 — smarter memory guard
 
 - `tt-stats memguard` no longer restarts a **small** client (below `MEMGUARD_SMALL_KB`, 5000 kB): then

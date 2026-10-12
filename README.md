@@ -337,6 +337,8 @@ Every 5 seconds the guard checks free memory (`MemAvailable`). Below the thresho
 
 The guard does not hit the wrong target: if the client is small (below 5000 kB), something else eats the memory, so it only writes to the log. The VPN pauses only if memory is still critical (below 2/3 of the threshold); otherwise the event is just logged. Once a night it restarts the client if the client has grown above 12000 kB (`/opt/etc/cron.daily/tt-memguard-nightly`). These numbers can be changed in `mode.conf`: `MEMGUARD_SMALL_KB`, `MEMGUARD_CRIT_KB`, `MEMGUARD_NIGHT_KB` (`0` turns the nightly restart off), then `tt-stats memguard on` again.
 
+**Overload brake.** When the VPN drops, devices behind a kill switch may retry DNS without a pause — thousands of connections, the kernel swaps and a 128 MB router can hang; restarting the client does not help then. If free memory stays below the threshold and the load average is 20 or more for 2 minutes, the guard stops heavy optional jobs (the Razvilka map build) and for 10 minutes lets short UDP connections expire in 5 s instead of 30 s. `MEMGUARD_LOAD` in `mode.conf` sets the load (`0` turns the brake off), `MEMGUARD_SHED` — which jobs to stop.
+
 ### Update notifications
 
 The router tells you when a new release is out — it never updates itself:

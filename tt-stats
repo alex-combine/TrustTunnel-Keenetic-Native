@@ -19,13 +19,15 @@
 #                      memory guard for 128 MB routers: restart the client when free
 #                      memory drops below KB (default 10000) instead of letting the router hang;
 #                      a small client is left alone, the VPN pauses only if memory stays critical,
-#                      and a bloated client is restarted once a night (/opt/etc/cron.daily)
+#                      and a bloated client is restarted once a night (/opt/etc/cron.daily);
+#                      overload brake: low memory and a high load for 2 minutes -> stop heavy optional
+#                      jobs and shorten the UDP conntrack timeout for 10 minutes
 #   update-check       is a newer release out? Reads only the version number, downloads and
 #                      changes nothing. A daily check is installed in /opt/etc/cron.daily
 #
 # Log: /opt/var/log/tt-stats.log, memory guard: /opt/var/log/tt-memguard.log
 
-TTS_VERSION="2.3.1"
+TTS_VERSION="2.3.2"
 SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 TTS_REPO_URL="${TTS_REPO_URL:-https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download}"
 
@@ -57,6 +59,8 @@ MEMGUARD_LOG="${MEMGUARD_LOG:-/opt/var/log/tt-memguard.log}"
 MEMGUARD_PAUSE="/tmp/tt-memguard.pause"
 MEMGUARD_HIST="/tmp/tt-memguard.hist"
 MEMGUARD_CRON="${MEMGUARD_CRON:-/opt/etc/cron.daily/tt-memguard-nightly}"
+MEMGUARD_UDPT="/tmp/tt-memguard.udp-timeout"   # saved UDP conntrack timeout while the brake is on
+UDP_TIMEOUT_FILE="${UDP_TIMEOUT_FILE:-/proc/sys/net/netfilter/nf_conntrack_udp_timeout}"
 MG_TARGET="${MG_TARGET:-/opt/etc/init.d/S99trusttunnel}"   # what the guard restarts (overridable for tests)
 
 TT_MODE="socks5"
@@ -70,6 +74,8 @@ MEMGUARD_LOW_KB="${MEMGUARD_LOW_KB:-10000}"
 MEMGUARD_CRIT_KB="${MEMGUARD_CRIT_KB:-$((MEMGUARD_LOW_KB * 2 / 3))}"   # pause the VPN only below this
 MEMGUARD_SMALL_KB="${MEMGUARD_SMALL_KB:-5000}"   # client smaller than this: memory is eaten by something else
 MEMGUARD_NIGHT_KB="${MEMGUARD_NIGHT_KB:-12000}"  # nightly restart if the client is bigger (0 = off)
+MEMGUARD_LOAD="${MEMGUARD_LOAD:-20}"             # overload brake: load average at or above this (0 = off)
+MEMGUARD_SHED="${MEMGUARD_SHED:-geo-build.sh}"   # heavy optional jobs to stop under overload
 OPKG_IFACE="opkgtun${TUN_IDX}"
 NDM_IFACE="OpkgTun${TUN_IDX}"
 
@@ -322,6 +328,28 @@ upd_status_line() {  # uses the cached result; checks again if it is older than 
 
 mem_avail() { awk '/MemAvailable/ {print $2; exit}' /proc/meminfo; }
 client_rss() { p=$(pidof trusttunnel_client | cut -d' ' -f1); [ -n "$p" ] && awk '/VmRSS/ {print $2}' "/proc/$p/status"; }
+load1() { cut -d' ' -f1 "${LOADAVG_FILE:-/proc/loadavg}" | cut -d. -f1; }   # file overridable for tests
+
+# Overload brake. When the VPN drops, devices behind a kill switch retry DNS without a pause:
+# thousands of short UDP conntrack entries, the kernel swaps, the load goes to 50+ and the
+# router hangs. Restarting the client does not help here. Instead: stop heavy optional jobs
+# and let short UDP entries expire in 5 s instead of 30 s for 10 minutes (UDP streams that
+# keep sending, e.g. QUIC or calls, use a separate timeout and are not affected).
+mg_brake() {  # $1 = load, $2 = free kB
+    mlog "BRAKE: overload - load $1, free $2 kB for 2 minutes: stopping ${MEMGUARD_SHED:-nothing}, UDP conntrack timeout 5 s for 10 minutes"
+    for n in $MEMGUARD_SHED; do
+        for p in $(ps w | awk -v n="$n" -v me="$$" 'index($0, n) && $1 != me && !/awk/ {print $1}'); do
+            # children first (a shell waiting for curl would otherwise finish that call first)
+            # shellcheck disable=SC2013  # PIDs are single words
+            for c in $(awk -v pp="$p" '$4 == pp {print $1}' /proc/[0-9]*/stat 2>/dev/null); do kill "$c" 2>/dev/null; done
+            kill "$p" 2>/dev/null && mlog "stopped: $n (pid $p)"
+        done
+    done
+    if [ -w "$UDP_TIMEOUT_FILE" ] && [ ! -f "$MEMGUARD_UDPT" ]; then
+        cat "$UDP_TIMEOUT_FILE" > "$MEMGUARD_UDPT"; echo 5 > "$UDP_TIMEOUT_FILE"
+        ( sleep 600; cat "$MEMGUARD_UDPT" > "$UDP_TIMEOUT_FILE"; rm -f "$MEMGUARD_UDPT" ) </dev/null >/dev/null 2>&1 &
+    fi
+}
 # The PID file survives a crash on the USB drive; after a reboot that PID may belong to another
 # process, so check the command line, not just that the PID exists.
 mg_running() { p=$(cat "$MEMGUARD_PID" 2>/dev/null); [ -n "$p" ] && grep -q memguard-run "/proc/$p/cmdline" 2>/dev/null; }
@@ -346,8 +374,21 @@ cmd_memguard_run() {
     echo $$ > "$MEMGUARD_PID"
     trap 'rm -f "$MEMGUARD_PID"; exit 0' TERM INT
     mlog "started: threshold ${MEMGUARD_LOW_KB} kB, now free $(mem_avail) kB"
+    [ -f "$MEMGUARD_UDPT" ] && { cat "$MEMGUARD_UDPT" > "$UDP_TIMEOUT_FILE"; rm -f "$MEMGUARD_UDPT"; }   # restore after a crash
+    hot=0; braked=0
     while true; do
         a=$(mem_avail)
+        if [ "$MEMGUARD_LOAD" -gt 0 ] 2>/dev/null; then
+            l=$(load1); now=$(date +%s)
+            if [ "${a:-999999}" -lt "$MEMGUARD_LOW_KB" ] && [ "${l:-0}" -ge "$MEMGUARD_LOAD" ]; then
+                [ "$hot" = 0 ] && hot=$now
+                if [ $((now - hot)) -ge 120 ] && [ $((now - braked)) -ge 600 ]; then
+                    mg_brake "$l" "$a"; braked=$now
+                fi
+            else
+                hot=0
+            fi
+        fi
         if [ "${a:-999999}" -lt "$MEMGUARD_LOW_KB" ] && [ ! -f "$MEMGUARD_PAUSE" ]; then
             now=$(date +%s)
             { awk -v n="$now" 'n-$1<600' "$MEMGUARD_HIST" 2>/dev/null; echo "$now"; } > "$MEMGUARD_HIST.new"
@@ -423,6 +464,8 @@ EOF
         *)
             if [ -x "$MEMGUARD_INIT" ]; then echo "Memory guard: on (threshold ${MEMGUARD_LOW_KB} kB, pause below ${MEMGUARD_CRIT_KB} kB, small client < ${MEMGUARD_SMALL_KB} kB)$(mg_running && echo ', running' || echo ', NOT running')"
                 if [ -x "$MEMGUARD_CRON" ] && [ "$MEMGUARD_NIGHT_KB" -gt 0 ] 2>/dev/null; then echo "Nightly restart: if the client is above ${MEMGUARD_NIGHT_KB} kB"; else echo "Nightly restart: off"; fi
+                if [ "$MEMGUARD_LOAD" -gt 0 ] 2>/dev/null; then echo "Overload brake: load >= ${MEMGUARD_LOAD} and free < ${MEMGUARD_LOW_KB} kB for 2 minutes"; else echo "Overload brake: off"; fi
+                [ -f "$MEMGUARD_UDPT" ] && echo "Brake is on now: UDP conntrack timeout 5 s (back to $(cat "$MEMGUARD_UDPT") s within 10 minutes)"
             else echo "Memory guard: off — enable: tt-stats memguard on"; fi
             echo "Free memory:  $(mem_avail) kB; client: $(client_rss) kB"
             [ -f "$MEMGUARD_PAUSE" ] && echo "VPN is paused by the guard (starts again within 15 minutes)"

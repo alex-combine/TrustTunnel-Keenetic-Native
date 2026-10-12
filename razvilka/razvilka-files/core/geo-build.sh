@@ -10,6 +10,7 @@
 #   EXTRA_ASN="49505 ..." own hosting providers (AS numbers) — subtract too (default — from the country profile)
 #   SUBTRACT_DC=1, KEEP_ASN="…" — from the country profile (geo-profiles.sh), can be overridden here
 #   EXTRA_NETS="1.2.3.4/32 ..." own addresses — subtract (e.g. the address of your VPN server)
+#   MIN_MEM_KB=12000      do not start with less free memory; stop going online below half of it
 #   EXCLUDE_DOMAINS="site.ru ..." home country sites to send via VPN (addresses are resolved on every build)
 # Usage: geo-build.sh dry [code] — build and show, change nothing (with a code — a trial for another country)
 #        geo-build.sh apply — build and install (from cron once a day)
@@ -17,7 +18,7 @@
 export PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
 CONF=/opt/etc/direct-routes.geo.conf
 [ -f "$CONF" ] || { echo "нет $CONF"; exit 1; }
-ENABLED=1; LITE=0; COUNTRY=ru; GROUP=rudirect; EXTRA_NETS=""; EXCLUDE_DOMAINS=""; TUN=opkgtun0; CORE=/opt/share/razvilka/core
+ENABLED=1; LITE=0; MIN_MEM_KB=12000; COUNTRY=ru; GROUP=rudirect; EXTRA_NETS=""; EXCLUDE_DOMAINS=""; TUN=opkgtun0; CORE=/opt/share/razvilka/core
 [ -f /opt/etc/razvilka/net.conf ] && . /opt/etc/razvilka/net.conf   # this router's TUN and core folder (CORE)
 . "$CONF"
 . $CORE/geo-profiles.sh
@@ -34,14 +35,32 @@ mkdir -p $W $CACHE /opt/etc/direct-routes.auto
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 say() { echo "$*"; echo "$(ts) geo: $*" >> $LOG; }
 NETRE='^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$'
+mem_kb() { awk '/MemAvailable/ {print $2; exit}' /proc/meminfo; }
+OFFLINE=0; FAILS=0; WHY=""
+
+# When the VPN dies or memory runs out in the middle of a build, waiting a minute for every
+# source only loads a router that is already in trouble. After 2 failures in a row (or when
+# memory is low) stop going online: the copies on USB are used, and the result is not applied.
+net_gone() {
+  [ "$OFFLINE" = 1 ] && return 0
+  m=$(mem_kb)
+  if [ "${m:-0}" -lt $((MIN_MEM_KB / 2)) ]; then
+    OFFLINE=1; WHY="мало памяти (${m} кБ)"; say "$WHY — дальше без сети, только копии с флешки"; return 0
+  fi
+  [ "$FAILS" -ge 2 ] || return 1
+  if vpn_ok; then FAILS=0; return 1; fi
+  OFFLINE=1; WHY="VPN не отвечает"; say "$WHY — дальше без сети, только копии с флешки"; return 0
+}
 
 fetch() {  # $1=destination, $2=min. lines, then mirror URLs; a successful download updates the copy on USB
   f=$1; min=$2; shift 2; name=$(basename $f)
   for u in "$@"; do
+    net_gone && break
     curl -sf --interface $TUN --max-time 60 "$u" 2>/dev/null | tr -d '\r' | grep -E "$NETRE" > $f.tmp
     if [ "$(grep -c . $f.tmp)" -ge "$min" ]; then
-      mv $f.tmp $f; cmp -s $f $CACHE/$name || cp $f $CACHE/$name; return 0
+      FAILS=0; mv $f.tmp $f; cmp -s $f $CACHE/$name || cp $f $CACHE/$name; return 0
     fi
+    FAILS=$((FAILS + 1))
   done
   rm -f $f.tmp
   [ -s $CACHE/$name ] && { cp $CACHE/$name $f; say "$name: источник не ответил — беру копию с флешки"; return 0; }
@@ -50,10 +69,12 @@ fetch() {  # $1=destination, $2=min. lines, then mirror URLs; a successful downl
 
 asn_nets() {  # company networks (AS numbers) from RIPEstat; a successful answer goes to the copy on USB
   for a in "$@"; do
-    curl -sf --interface $TUN --max-time 60 "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS$a&sourceapp=keenetic-geo" 2>/dev/null |
+    : > $W/as$a.tmp
+    net_gone || curl -sf --interface $TUN --max-time 60 "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS$a&sourceapp=keenetic-geo" 2>/dev/null |
       grep -o '"prefix": *"[0-9.]*/[0-9]*"' | grep -oE '[0-9.]+/[0-9]+' > $W/as$a.tmp
-    if [ -s $W/as$a.tmp ]; then cmp -s $W/as$a.tmp $CACHE/as$a.txt || cp $W/as$a.tmp $CACHE/as$a.txt
-    else say "AS$a: RIPEstat не ответил — беру копию с флешки"; fi
+    if [ -s $W/as$a.tmp ]; then FAILS=0; cmp -s $W/as$a.tmp $CACHE/as$a.txt || cp $W/as$a.tmp $CACHE/as$a.txt
+    elif [ "$OFFLINE" = 1 ]; then :   # already logged once
+    else FAILS=$((FAILS + 1)); say "AS$a: RIPEstat не ответил — беру копию с флешки"; fi
     [ -s $CACHE/as$a.txt ] && cat $CACHE/as$a.txt
     rm -f $W/as$a.tmp; sleep 1
   done
@@ -78,7 +99,7 @@ build() {
     for h in $d www.$d; do dig +short +time=3 +tries=1 A $h 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/$/\/32/'; done
   done >> $W/extra.txt
   cat $W/datacenters.txt $W/extra.txt 2>/dev/null | grep -E "$NETRE" > $W/excl.txt
-  asn_nets $KEEP_ASN | grep -E "$NETRE" > $W/keep.txt
+  asn_nets $KEEP_ASN > $W/keep.raw; grep -E "$NETRE" $W/keep.raw > $W/keep.txt
   # networks → number intervals, sort, subtract, back to networks (busybox awk, numbers up to 2^32 — no precision loss)
   toiv='{split($1,a,"[./]"); s=a[1]*16777216+a[2]*65536+a[3]*256+a[4]; z=2^(32-a[5]); s=s-s%z; printf "%.0f %.0f\n", s, s+z-1}'
   awk "$toiv" $W/keep.txt | sort -n -k1,1 > $W/keep.iv
@@ -115,7 +136,12 @@ case "$1" in
   apply)
     trap 'rm -rf $W' EXIT   # temporary files are in memory (tmpfs) — clean up
     [ "$ENABLED" = 1 ] || { echo "выключено (ENABLED=0)"; exit 0; }
+    renice 19 $$ >/dev/null 2>&1   # the build must never compete with the router's own work
+    m=$(mem_kb)
+    [ "${m:-0}" -ge "$MIN_MEM_KB" ] || { say "мало памяти (${m} кБ, нужно $MIN_MEM_KB) — сборку переношу на следующую ночь"; exit 1; }
+    vpn_ok || { say "VPN не отвечает — сборку переношу на следующую ночь"; exit 1; }
     build || exit 1
+    [ "$OFFLINE" = 1 ] && { say "$WHY во время сборки — не ставлю, повторю следующей ночью"; exit 1; }
     new=$(grep -c . $W/result.txt); old=$(grep -c . $OUT 2>/dev/null || echo 0)
     [ "$new" -ge 10 ] || { say "итог пустой ($new) — не ставлю"; exit 1; }
     # big countries (US ~48k networks): no more than the router memory can hold
