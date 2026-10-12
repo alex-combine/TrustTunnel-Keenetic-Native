@@ -135,7 +135,7 @@ MEMT=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo); MEMA=$(awk '/MemAvai
 if [ "$MEMT" -lt 100 ]; then bad "$(L 'Память' 'Memory'): $MEMT $(L МБ MB) — $(L 'боту Развилки нужно от 128 МБ' 'the Razvilka bot needs 128 MB or more')"
 elif [ "$MEMA" -lt 12 ]; then wrn "$(L 'Память' 'Memory'): $MEMT $(L МБ MB), $(L 'свободно' 'free') $MEMA $(L МБ MB) — $(L 'тесно; бот будет ждать, если памяти не хватит' 'tight; the bot will wait when memory is low')"
 else okm "$(L 'Память' 'Memory'): $MEMT $(L МБ MB), $(L 'свободно' 'free') $MEMA $(L МБ MB)"; fi
-[ "$MEMT" -lt 200 ] && LITE_DEF=1 || LITE_DEF=0
+[ "$MEMT" -lt 256 ] && LITE_DEF=1 || LITE_DEF=0
 [ -x /opt/bin/opkg ] && okm "Entware" || bad "Entware: —"
 FREE=$(df -m /opt 2>/dev/null | awk 'NR==2{print $4}')
 [ "${FREE:-0}" -ge 20 ] && okm "$(L 'Свободно на флешке' 'Free on USB'): ${FREE} $(L МБ MB)" || bad "$(L 'Свободно на флешке' 'Free on USB'): ${FREE:-?} $(L МБ MB) (< 20)"

@@ -11,14 +11,15 @@ everything else                       ──► through your VPN
 
 The router builds the map of your country's networks by itself and refreshes it every night. You control it from your own Telegram bot: check a site, send it direct or via VPN, switch a device, get alerts when the VPN drops.
 
-> **Beta.** Tested on Keenetic Hero 4G (KN-2310, 128 MB RAM, KeeneticOS 5.1) and in a sandbox. It is off unless you install it. Please report problems in [Issues](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/issues).
+> **Beta.** Tested on Keenetic Hero 4G (KN-2310, 128 MB RAM, KeeneticOS 5.1): in a sandbox and with a full acceptance run on a live router (all buttons, routes, self-healing, install and removal). It is off unless you install it. Please report problems in [Issues](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/issues).
 
-Razvilka works with **TrustTunnel from this project in TUN mode** — the only setup it is tested with.
+Razvilka works with **TrustTunnel from this project in TUN attach mode** — the only setup it is tested with.
 
 ## Requirements
 - Keenetic with **Entware on a USB stick**.
-- **TrustTunnel installed by this project in TUN mode** (`install.sh`, mode 2), working, and devices with a VPN policy.
-- **128 MB of RAM or more** (on 128–256 MB the installer offers a "light map").
+- **TrustTunnel installed by this project in TUN mode** (`install.sh`, mode 2; `use_existing = true` in the client config — the installer sets it up this way), working, and devices with a VPN policy. An old classic setup? Run the main installer again — it switches it to the new mode by itself.
+- **At least 20 MB free on the USB stick** (Razvilka itself takes about 1 MB).
+- **128 MB of RAM or more** (below 256 MB the installer offers a "light map").
 - Your own Telegram bot: open **@BotFather → /newbot** and keep the token.
 
 ## How much it takes from the router
@@ -28,12 +29,15 @@ The bot lives on the router itself — no servers, no cloud.
 - **CPU:** almost idle — a short VPN check once a minute, checks every 5–10 minutes, the country map rebuild at night (about 1–2 minutes).
 
 ## Install
+**Easiest:** run the [main installer](../README.md#quick-start) — once the VPN works it offers to install Razvilka (and to update it if it is already installed).
+
+By hand:
+
 1. SSH into the router and download the package:
    ```
    mkdir -p /opt/tmp/razvilka-setup && cd /opt/tmp/razvilka-setup
    curl -fsSL https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download/razvilka.tar.gz | tar xzf -
    ```
-   (Easier: the main installer of this project offers to install Razvilka at the very end, once the VPN works.)
 2. Run a **dry run** first — it changes nothing:
    ```
    sh /opt/tmp/razvilka-setup/razvilka-install.sh --demo --lang=en
@@ -53,7 +57,7 @@ The installer and the bot speak English and Russian. To switch the bot later: ed
 ```
 sh /opt/tmp/razvilka-setup/razvilka-install.sh --uninstall --lang=en
 ```
-Everything the installer added is removed in reverse order. Answer "yes" to the last question to delete the settings and the bot token too.
+If the folder `/opt/tmp/razvilka-setup` is gone, download the package first with the command from install step 1. Everything the installer added is removed in reverse order. Answer "yes" to the last question to delete the settings and the bot token too.
 
 ## What the bot does
 - 📊 **Status** — VPN, router memory, freshness of the country map.

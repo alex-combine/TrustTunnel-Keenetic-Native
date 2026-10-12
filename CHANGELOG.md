@@ -1,6 +1,12 @@
 # Changelog
 
-## v2.3.3 — Razvilka: self-healing and a watchdog that really alarms
+## v2.3.3 — one installer from zero to a working VPN, update from any version; Razvilka: self-healing and a watchdog
+
+The short version: `install.sh` now speaks Russian and English, sets the client up from the server file by itself,
+starts and checks the VPN (and puts everything back if it fails), updates any older install — including the
+original TrustTunnel-Keenetic — keeping its settings, and offers Razvilka at the end. Razvilka got self-healing,
+a connection watchdog, readable hints and many fixes from a live acceptance run. Details below.
+
 
 - **Self-healing** (`rzv-act.sh guard`, every minute): after 3 minutes without data through the VPN,
   devices with a VPN policy get an instant «no DNS» (the DNS fuse: REJECT on port 53, IPv4 and IPv6 —
@@ -62,6 +68,16 @@
   classic TUN install to attach with `tt-stats enable` and offers Razvilka. SOCKS5 is kept as it is. A mode
   change rebuilds the current client config (no server file needed); a SOCKS5 config is no longer kept by
   mistake after choosing TUN. `install.sh --check` only reports; every step goes to `/opt/var/log/tt-install.log`.
+- **Installer safety after review:** an interrupted run (Ctrl+C, a dropped SSH session, an error) puts the
+  previous files back and starts the VPN again; scripts are replaced by rename, not overwritten in place; the
+  update menu has «3 — quit» and does nothing without a terminal; `tt-stats enable` survives a dropped SSH
+  session; the SOCKS address is read from the client config; free space via `df -P`; a classic install with a
+  client older than 1.0.62 is told to update the client instead of failing the switch; after a mode change the
+  current client config is used (not an old `config.toml`), and the server file is suggested for deletion.
+- **Note for Razvilka users on another VPN** (WireGuard, OpenVPN): the Razvilka installer now updates only on
+  TrustTunnel in TUN attach mode — the only tested setup. An installed Razvilka keeps working; to update it,
+  move to TrustTunnel or keep the current version.
+- Razvilka installer: the «light map» is suggested below 256 MB of RAM (as the text says), not below 200 MB.
 
 ## v2.3.2 — the router does not choke when the VPN drops at night
 

@@ -8,21 +8,73 @@
 
 > An extended version of [TrustTunnel-Keenetic](https://github.com/artemevsevev/TrustTunnel-Keenetic) by Artem Evsevev.
 >
-> **What is new:** the TUN connection (OpkgTunN) finally shows real traffic statistics in the Keenetic web interface — the classic setup always shows 0.
-> Existing installations switch with one command, with automatic rollback if anything goes wrong.
-> Jump to: [Dashboard statistics](#dashboard-statistics-attach-mode) · [Upgrading an existing router](#upgrading-a-router-with-the-classic-setup) · [Razvilka (beta): home country direct](#razvilka-beta-home-country-direct-everything-else-via-vpn)
+> **What it does:**
+> - **One command — from nothing to a working VPN.** The installer (in Russian or English) builds the client config from the server file by itself, starts the VPN, checks it and, if something is wrong, puts everything back.
+> - **Update from any version**, including the original TrustTunnel-Keenetic: the installer works out what is installed, keeps your settings and makes a backup.
+> - **Statistics in the Keenetic web interface** for the TUN connection (the classic setup always shows 0).
+> - **Razvilka** (optional, beta): sites of your own country go direct, everything else via VPN; your own Telegram bot on the router.
+>
+> Jump to: [Quick start](#quick-start) · [Updating](#trusttunnel-already-installed-updating-from-any-version) · [If something is wrong](#if-something-is-wrong) · [Razvilka](#razvilka-beta-home-country-direct-everything-else-via-vpn)
 
 ![The TrustTunnel TUN connection in the Keenetic web interface: live traffic graph, current speed and totals](docs/dashboard-stats.png)
+
+## Quick start
+
+1. **On the router:** Keenetic with firmware 5.x, [Entware on a USB stick](https://help.keenetic.com/hc/en-us/articles/360021214160), the `curl` and `ip-full` packages:
+   ```bash
+   opkg update && opkg install curl ip-full
+   ```
+2. **A TrustTunnel server on a VPS** and the client file `config.toml` exported from it ([how](#1-installing-server-on-vps)). Copy `config.toml` to the router into `/opt/tmp/` (WinSCP or `scp config.toml root@192.168.1.1:/opt/tmp/`).
+3. **One command on the router:**
+   ```bash
+   curl -fsSL https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download/install.sh | sh
+   ```
+4. **What to answer:** the language; mode **2 — TUN** (needed for the statistics and Razvilka); interface index — Enter; «Create TrustTunnel interface?» — **y**; «Install/Update TrustTunnel Client?» — **y**. Then the installer finds `config.toml`, builds the config, starts the VPN and checks for up to 2 minutes that the internet goes through it.
+5. **Done** when you see `✅ The VPN works`. At the end the installer offers Razvilka — you can say no. Check later: `tt-stats status`.
+
+If it fails, the installer puts everything back and shows the reason: see [If something is wrong](#if-something-is-wrong). VPN already installed? The same command updates it: see [Updating](#trusttunnel-already-installed-updating-from-any-version).
+
+## If something is wrong
+
+- **«No internet through the VPN within 2 minutes».** The installer has already put the previous files back and shown the last lines of the client log. Common causes: the server is down, the port is closed, a wrong `config.toml` got onto the router. More: `tail -n 30 /opt/var/log/trusttunnel.log`. Fix it and run the command again.
+- **What is installed and what would the installer do?** `curl -fsSL https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download/install.sh | sh -s -- --check` — changes nothing. Installer journal: `/opt/var/log/tt-install.log`. Attach the `--check` output to a question in [Issues](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/issues).
+- **The install command breaks off** (`Connection reset by peer`) — see [below](#download-fails-connection-reset-by-peer).
+- **0 traffic in the web interface** — see [below](#the-web-interface-shows-0-traffic-for-opkgtunn).
+- **The router hangs during big downloads** — see [below](#the-router-hangs-or-reboots-during-big-downloads-through-the-vpn).
+- **Turn the VPN off right now:** `/opt/etc/init.d/S99trusttunnel stop`.
+
+## Rollback and removal
+
+- **Get the files from before an update back.** Before every change the installer copies them to `/opt/backup/tt_update_<time>/` or `/opt/backup/tt_setup_<time>/` (service, hook, `tt-stats`, client config, `mode.conf`). If a run is interrupted (Ctrl+C, a dropped SSH session, an error) or the VPN does not work after an update, the copy comes back by itself. By hand — copy the files back and run `/opt/etc/init.d/S99trusttunnel restart`.
+- **Client config:** next to it are `trusttunnel_client.toml.bak_<time>` (the previous one) and `.failed_<time>` (the new one that did not work).
+- **From attach mode back to classic:** `tt-stats disable`.
+- **Remove Razvilka:** `sh /opt/tmp/razvilka-setup/razvilka-install.sh --uninstall` (if that folder is gone, download Razvilka again, see [its README](razvilka/README.md)).
+- **Remove TrustTunnel completely** (Razvilka first, if installed):
+  ```bash
+  grep TUN_IDX /opt/trusttunnel_client/mode.conf   # remember the number N
+  /opt/etc/init.d/S99trusttunnel stop
+  tt-stats memguard off; tt-stats update-check --remove-cron
+  rm -f /opt/etc/init.d/S99trusttunnel /opt/etc/init.d/S99ttstats-guard /opt/etc/ndm/wan.d/010-trusttunnel.sh /opt/bin/tt-stats
+  rm -rf /opt/trusttunnel_client                   # client, config and the server password
+  ndmc -c 'no interface OpkgTunN'                  # N from above; in SOCKS5 mode: ProxyN
+  ndmc -c 'system configuration save'
+  ```
+
+## What it takes from the router
+
+- **USB stick:** the TrustTunnel client about 12 MB, its setup wizard about 2 MB, the scripts a few dozen KB. An update needs at least 2 MB free (for the backups).
+- **RAM:** the client takes a few MB (about 4 MB on a Keenetic Hero 4G when idle, more during big downloads — routers with 128 MB have the [memory guard](#optional-memory-guard-routers-with-128-mb)), the service watchdog about 1.5 MB.
+- **Razvilka** (if you install it) — about 1 MB more on the USB stick and about 8 MB of RAM, see [its README](razvilka/README.md#how-much-it-takes-from-the-router).
 
 ## Prerequisites
 
 Before installing on the router, you must:
 1. Install Entware on the router: [Entware Installation Guide](https://help.keenetic.com/hc/en-us/articles/360021214160-Installing-the-Entware-package-system-repository-on-a-USB-drive)
 2. To use in Proxy mode, install the "Proxy client" component on the router.
-3. Install curl:
+3. Install curl and ip-full (`ip-full` is needed for TUN mode):
    ```bash
    opkg update
-   opkg install curl
+   opkg install curl ip-full
    ```
 4. Install and configure the TrustTunnel server on a VPS (see below)
 
@@ -121,7 +173,7 @@ The installer first asks for the language — Russian or English (or pass `--lan
 > The script automatically detects the latest stable version (GitHub Release).
 > To install a specific version:
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --version v2.0.2
+> curl -fsSL https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --version v2.3.3
 > ```
 
 > To install from the `main` branch (latest dev version):
@@ -131,12 +183,12 @@ The installer first asks for the language — Russian or English (or pass `--lan
 
 The installation script will perform the following:
 1. Stop the running TrustTunnel service (if running)
-2. Prompt to select the operation mode (SOCKS5 or TUN); during reconfiguration, the current mode is proposed by default
+2. Prompt to select the operation mode (SOCKS5 or TUN; **choose 2 — TUN**, it is needed for the statistics and Razvilka); during reconfiguration, the current mode is proposed by default
 3. Automatically determine occupied interfaces (Proxy for SOCKS5, OpkgTun for TUN) and propose the first free index
 4. Download and install autostart scripts (`S99trusttunnel`, `010-trusttunnel.sh`) and the `tt-stats` helper (`/opt/bin/tt-stats`)
 5. Save the selected mode to `/opt/trusttunnel_client/mode.conf`
 6. Prompt to create an interface (ProxyN for SOCKS5 or OpkgTunN for TUN) in Keenetic; when changing the mode or index, it will delete the old interface
-7. Prompt to install/update the TrustTunnel client (supported architectures: x86_64, aarch64, armv7, mips, mipsel)
+7. Prompt to install/update the TrustTunnel client — on a new install answer «y», without the client the VPN cannot be set up (supported architectures: x86_64, aarch64, armv7, mips, mipsel)
 8. Find the `config.toml` exported on the server (in `/opt/tmp/` and other usual places, or ask for its path or a `tt://` link), build the client config from it (the right listener for the mode, kill switch on, file closed with 600), start the VPN and check that the internet really goes through it. If it does not within 2 minutes, roll back and show the last log lines
 9. In TUN mode, when the VPN works: offer to install Razvilka right away (optional)
 
@@ -148,10 +200,12 @@ The same single command. Before changing anything the installer looks at what is
 |---|---|
 | This project, attach mode | Updates the service scripts and tt-stats, turns the kill switch on, restarts and checks the VPN, offers to install or update Razvilka |
 | The original TrustTunnel-Keenetic or this project in the classic TUN mode | The same, plus switches to attach mode with `tt-stats enable` (own check and rollback, boot guard) and offers one reboot for the statistics |
-| SOCKS5 mode (any project) | Updates the scripts, keeps the mode and the web panel settings; for TUN and Razvilka — «set up again» and move the device policies in the web panel |
+| SOCKS5 mode (any project) | Updates the scripts, turns the kill switch on, keeps the mode and the web panel settings; for TUN and Razvilka — «set up again» and move the device policies in the web panel |
 | Unclear (some files are missing) | Changes nothing by itself, offers «set up again» |
 
-Your server address and password are kept: when the mode changes the installer rebuilds your current client config, `config.toml` from the server is not needed. Old files are copied to `/opt/backup/tt_update_<time>/`; if the VPN does not work after the update, everything is put back automatically. Every step goes to the journal `/opt/var/log/tt-install.log`; after an interruption just run the command again — the steps are safe to repeat.
+The «Found → Plan» screen offers three choices: **1 — update and keep the settings** (default), **2 — set up again** (all questions, as in a new install), **3 — quit**. Your server address and password are kept: when the mode changes the installer rebuilds your current client config, `config.toml` from the server is not needed. Old files are copied to `/opt/backup/tt_update_<time>/`. If the VPN worked before the update and does not after it, everything is put back automatically; an interrupted run (Ctrl+C, a dropped SSH session) puts the previous files back too. Every step goes to the journal `/opt/var/log/tt-install.log`; after an interruption just run the command again.
+
+The TrustTunnel client itself is not changed by an update (choice 1). To update it — choice 2 and «y» to the client question (attach mode needs client 1.0.62 or newer).
 
 See what is installed and what would be done, changing nothing:
 ```bash
@@ -169,7 +223,7 @@ Attach its output to a question in Issues.
 | Compatibility | All Keenetic versions with Entware | Keenetic firmware v5+ with OpkgTun support |
 | Requirements | — | `ip-full` package in Entware, IP address from VPN server |
 
-#### Client Configuration
+#### Client configuration by hand (usually not needed)
 
 > The installer does this by itself (step 8 above): just put `config.toml` into `/opt/tmp/` before running it. The steps below are for setting it up by hand.
 
@@ -295,7 +349,7 @@ Without `included_routes = []` the client stops with `Managed routing for an exi
 
 ### New installation
 
-Run `install.sh`, choose TUN, add the lines above to the client config and start the service. The installer creates `OpkgTunN`, and KeeneticOS creates its device right away. Check:
+Nothing to do: in TUN mode the installer creates `OpkgTunN` and writes these lines into the client config by itself, and KeeneticOS creates its device right away. Check:
 
 ```bash
 tt-stats status
@@ -306,6 +360,8 @@ If it says `not yet`, reboot the router once: `tt-stats reboot`.
 ### Upgrading a router with the classic setup
 
 For routers set up with the original TrustTunnel-Keenetic (or an older version of this one). Your client config and settings are kept; only the attach lines are added.
+
+**Easiest — run the [installer](#quick-start):** it sees the classic setup, updates the scripts and calls `tt-stats enable` by itself. By hand, without the installer:
 
 ```bash
 curl -fsSL https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download/tt-stats -o /opt/bin/tt-stats
@@ -341,7 +397,8 @@ All actions are logged to `/opt/var/log/tt-stats.log`.
 | `tt-stats disable` | Restore the classic setup from the backup |
 | `tt-stats reboot` | Pre-flight checks, then router reboot |
 | `tt-stats version` | Helper version |
-| `tt-stats update-check` | Is a newer release out? (reads only the version number) |
+| `tt-stats update-check` | Is a newer release out? (reads only the version number); `--remove-cron` turns the daily check off |
+| `tt-stats memguard [on [kB]\|off]` | Memory guard for routers with 128 MB (see below) |
 
 ### Recommended: kill switch
 
@@ -372,14 +429,14 @@ The router tells you when a new release is out — it never updates itself:
 - once a day (Entware cron, `/opt/etc/cron.daily/tt-stats-update-check`) a note goes to the router's **system log**, once per new version;
 - releases with a serious fix are marked **IMPORTANT** (the minimum safe version is in [`MIN_VERSION`](MIN_VERSION)).
 
-The check reads only the version number from GitHub: it downloads nothing, runs nothing and sends nothing about your router. To upgrade, re-run the installer (the VPN restarts for 5–10 seconds). To turn the daily check off: `tt-stats update-check --remove-cron`.
+The check reads only the version number from GitHub: it downloads nothing, runs nothing and sends nothing about your router. To upgrade, re-run the installer: the VPN restarts and the check takes up to 2 minutes (from the classic setup — about 3 more minutes and one reboot). To turn the daily check off: `tt-stats update-check --remove-cron`.
 
 Prefer e-mail? On the GitHub page click **Watch → Custom → Releases**.
 
 ### FAQ
 
 - **Does attach mode change routing, policies or the firewall?** No. KeeneticOS routes through `OpkgTunN` in both modes; only who creates the device changes.
-- **My client is older than 1.0.62.** `tt-stats enable` refuses to switch. Update the client (`install.sh` offers it), then run it again.
+- **My client is older than 1.0.62.** `tt-stats enable` refuses to switch. Update the client: run the installer, choose «2 — set up again» and answer «y» to the client question.
 - **SOCKS5 mode?** Attach mode applies to TUN mode only.
 - **MTU?** In attach mode the device MTU comes from `TUN_MTU` in `mode.conf`; `tt-stats enable` sets it from `mtu_size` of the client config and keeps `interface OpkgTunN ip mtu` equal to it.
 - **What if the VPN server itself is down right after a reboot?** The boot guard cannot tell a server outage from a failed switch, so it restores the classic setup to be safe. When the server is back, run `tt-stats enable --reboot` again.
@@ -401,12 +458,13 @@ The installer offers it at the very end, once the VPN works; or see [razvilka/RE
 ```
 /opt/
 ├── bin/
-│   └── tt-stats                    # Dashboard statistics helper: status / enable / disable
+│   └── tt-stats                    # Helper: status / enable / disable / reboot / memguard / update-check
 ├── etc/
 │   ├── init.d/
 │   │   ├── S99trusttunnel          # Main init script
 │   │   ├── S99ttstats-guard        # Boot guard (created by tt-stats enable)
 │   │   └── S97tt-memguard          # Memory guard (created by tt-stats memguard on)
+│   ├── cron.daily/                 # tt-stats-update-check, tt-memguard-nightly
 │   └── ndm/
 │       └── wan.d/
 │           └── 010-trusttunnel.sh  # Hook on WAN up
@@ -419,7 +477,10 @@ The installer offers it at the very end, once the VPN works; or see [razvilka/RE
 │   └── log/
 │       ├── trusttunnel.log         # Work log (rotates at 512 KB)
 │       ├── trusttunnel.log.old     # Previous log after rotation
-│       └── tt-stats.log            # tt-stats log (switches, rollbacks, boot guard)
+│       ├── tt-stats.log            # tt-stats log (switches, rollbacks, boot guard)
+│       ├── tt-memguard.log         # Memory guard log
+│       └── tt-install.log          # Installer journal (the steps of every run)
+├── backup/                         # Copies before changes: tt_update_<time>/, tt_setup_<time>/
 └── trusttunnel_client/
     ├── trusttunnel_client          # Client binary
     ├── trusttunnel_client.toml     # Configuration
@@ -429,10 +490,10 @@ The installer offers it at the very end, once the VPN works; or see [razvilka/RE
 
 ## Manual Installation
 
-If you prefer manual installation instead of the script:
+If you prefer manual installation instead of the script. These are only the service scripts: the client, `mode.conf`, the interface and the client config are as in the sections above. These commands also download from GitHub; if GitHub cannot be reached from the router, download the files on a computer and replace `curl … -o` with copying from `/opt/tmp/`.
 
 ```bash
-VERSION="v2.0.2"  # Specify the required version (GitHub Release tag)
+VERSION="v2.3.3"  # Specify the required version (GitHub Release tag)
 
 # Create directories
 mkdir -p /opt/etc/init.d
@@ -494,7 +555,7 @@ The log is automatically rotated when it reaches 512 KB: the current file is ren
 
 ### Autostart on Boot
 - Entware automatically runs all `S*` scripts in `/opt/etc/init.d/` at startup
-- The `S99trusttunnel` script runs last (99 = high priority)
+- The `S99trusttunnel` script starts among the last (99 is the start order, not a priority)
 
 ### Watchdog (Restart on Crash)
 - After the client starts, a background watchdog process starts
@@ -577,6 +638,8 @@ mv /opt/etc/init.d/S99trusttunnel /opt/etc/init.d/_S99trusttunnel
 
 ## Troubleshooting
 
+First look at [If something is wrong](#if-something-is-wrong): the most common things after an install or update are there.
+
 ### The router hangs or reboots during big downloads through the VPN
 
 On routers with 128 MB of RAM (for example MIPS models like Keenetic Hero 4G) a long fast download through the tunnel — a Steam or game update, a torrent — can exhaust memory: the client buffers traffic faster than the CPU encrypts it. The web interface stops responding, the router may reboot, and if the download resumes after the reboot, everything repeats.
@@ -592,7 +655,7 @@ What helps:
 If the install command stops with `curl: (35) Recv failure: Connection reset by peer` (or a timeout), your provider interrupts connections to GitHub. The router itself is fine. What you can do:
 
 1. Run the command again a few times — the resets are often intermittent.
-2. Download the release files on a computer from the [Releases](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest) page (`install.sh`, `configure.sh`, `S99trusttunnel`, `010-trusttunnel.sh`, `tt-stats`), copy them to the router (for example with WinSCP or `scp` into `/opt/tmp/`) and follow [Manual Installation](#manual-installation).
+2. Download the release files on a computer from the [Releases](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest) page (`S99trusttunnel`, `010-trusttunnel.sh`, `tt-stats`, optionally `razvilka.tar.gz`), copy them to the router (for example with WinSCP or `scp` into `/opt/tmp/`) and put them in place by [Manual Installation](#manual-installation), replacing `curl` with copying. The installer itself does not work without GitHub — it downloads the files.
 3. If the router already has a working VPN connection, send `github.com` and `githubusercontent.com` through it (Routing → DNS routes in the Keenetic web interface) and run the command again.
 
 ### Client doesn't start
