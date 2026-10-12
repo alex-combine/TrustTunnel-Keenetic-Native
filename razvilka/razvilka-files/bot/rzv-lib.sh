@@ -174,6 +174,15 @@ hc_fail_direct() {   # the router is alive but the VPN is not: send the alarm st
 }
 hc_paused() { [ "$(kv_get hc_pause 0)" -gt "$(now)" ]; }   # «silence test» is running
 # Devices with a VPN policy in Keenetic (the same list as @policy in direct-routes)
+# Devices of the Razvilka group, as direct-routes.sh reads them: explicit MACs + @policy (every device with a
+# Keenetic policy), minus !MAC (strictly via VPN).
+group_macs() {
+  toks=$(sed 's/#.*//' $DRCONF 2>/dev/null | awk -v g=$GROUP '$1==g{for(i=3;i<=NF;i++) print tolower($i)}')
+  ex=" $(echo "$toks" | sed -n 's/^!//p' | tr '\n' ' ') "
+  for t in $toks; do case "$t" in
+    @policy) iptables -t mangle -S _NDM_HOTSPOT_PREROUTING_MANGL 2>/dev/null | grep -i set-xmark | grep -io 'mac-source [0-9a-f:]*' | awk '{print tolower($2)}';;
+    !*) ;; *) echo "$t";; esac; done | sort -u | awk -v ex="$ex" 'index(ex, " " $0 " ") == 0'
+}
 # Marks of the policies whose route goes into the VPN tunnel (learned while the VPN works: when it is
 # down, the firmware may drop the route). Other policies (e.g. «via the second ISP») are not touched.
 vpn_marks() { ip rule 2>/dev/null | awk '$2 == "from" && $3 == "all" && $4 == "fwmark" && $6 == "lookup" {sub("/.*", "", $5); print $5, $7}' |

@@ -93,7 +93,7 @@ push() {   # file $W/new → router (.prev copy) → load → VPN check → roll
 watch() {
   [ -f $HINTS_OFF ] && return 0
   vpn_ok || return 0                       # without a connection the hints would not arrive — wait
-  macs=$(sed 's/#.*//' $DRCONF | awk -v g=$GROUP '$1==g{for(i=3;i<=NF;i++) print tolower($i)}')
+  macs=$(group_macs); [ -n "$macs" ] || return 0     # «@policy» is a word, not a device: read it like direct-routes.sh
   tip=$(ip -4 addr show $TUN 2>/dev/null | awk '/inet /{sub("/.*","",$2); print $2; exit}'); [ -z "$tip" ] && return 0
   grep " dst=$tip " /proc/net/nf_conntrack 2>/dev/null | awk -v M=" $(echo $macs) " '
     { mac=""; if (match($0,/mac=[0-9a-f:]+/)) mac=substr($0,RSTART+4,17); if (index(M," " mac " ")==0) next

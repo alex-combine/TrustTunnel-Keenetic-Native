@@ -16,6 +16,9 @@
   recommend tracker.ru (RU) and healthchecks.io (EN): a test on 12.10.2026 showed that OKchecker does not
   turn 3 hours of silence into an alarm. The morning summary says every day when the watchdog last heard
   from the router.
+- **Hints work again:** the group is written as «@policy» (every device with a VPN policy), and the hint
+  check took that word for a device name, so it never found a single connection. Now it reads the group
+  like direct-routes.sh does.
 - **Clearer bot settings:** ✅/⬜ are switches (a tap switches at once), «→» opens its own screen, «…» asks
   first. Turning off «Home country direct», erasing the hint history and turning the watchdog off now ask
   for confirmation (Cancel comes first). The watchdog is called «Connection watchdog»; the status screen no
