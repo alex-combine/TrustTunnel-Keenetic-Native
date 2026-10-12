@@ -5,8 +5,7 @@
 - **Self-healing** (`rzv-act.sh guard`, every minute): after 3 minutes without data through the VPN,
   devices with a VPN policy get an instant «no DNS» (the DNS fuse: REJECT on port 53, IPv4 and IPv6 —
   nothing leaks to the ISP, no retry storm, no conntrack pile-up), and the VPN connection is restarted
-  (TrustTunnel — `S99trusttunnel reload`, WireGuard — `interface WireguardN down/up`, others — `VPN_NDM=`
-  in `net.conf`), every 30 minutes while the outage lasts; 3 minutes after a restart that did not help —
+  (`S99trusttunnel reload`), every 30 minutes while the outage lasts; 3 minutes after a restart that did not help —
   optional own script `heal2.sh`. Every minute the rules are checked against the fuse flag both ways. The fuse comes off
   after 2 good checks or by itself in 30 minutes; a netfilter hook puts it back after the firmware rebuilds
   the filter table. `GUARD=0` / `FUSE=0` / `HEAL=0` in `net.conf` turn it off.
@@ -40,6 +39,13 @@
   longer tells you to reboot the router while it restarts the VPN by itself; no more references to
   «🧪 Test alarm» where the service has none.
 - Installer 0.8: the `guard` cron line and the `57-razvilka-fuse.sh` hook; removal takes the fuse off.
+- **Razvilka is for TrustTunnel only:** it is tested only with TrustTunnel from this project in TUN mode, so the
+  installer now checks for exactly that (and says what to do if it is missing or in SOCKS5 mode) instead of
+  guessing among other tunnels, and no longer asks which interface is the VPN. The texts no longer mention
+  other VPN protocols.
+- **The installer speaks Russian and English:** `install.sh` asks for the language first (or `--lang=ru|en`),
+  every question and hint of `configure.sh` follows it (yes is `y` or `д`), and the Razvilka commands it prints
+  carry the same language.
 
 ## v2.3.2 — the router does not choke when the VPN drops at night
 

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 An extended version of TrustTunnel-Keenetic (by Artem Evsevev): a shell-script-based TrustTunnel client installer and service manager for Keenetic routers running Entware. It supports two operation modes: SOCKS5 proxy and TUN tunnel interface. TUN mode has two variants: **attach mode** (the client attaches to the `opkgtunN` device created by KeeneticOS, so the web UI shows traffic statistics) and the **classic mode** (the client creates `tun0`, the init script renames it).
 
-Installer output and code comments are in English. The README exists in English (`README.md`) and Russian (`README_ru.md`) — keep both in sync.
+The installer (`install.sh` → `configure.sh`) talks to the user in Russian or English (`L 'ru' 'en'`, language in `TT_LANG`, asked first or `--lang=ru|en`); code comments are in English. The README exists in English (`README.md`) and Russian (`README_ru.md`) — keep both in sync.
 
 ## Architecture
 
@@ -22,7 +22,7 @@ The system has five main components plus an optional add-on (6):
 
 5. **tt-stats** — helper installed to `/opt/bin/tt-stats`. `status` (read-only diagnostics), `enable [--reboot]` (safe switch to attach mode: pre-checks, backup to `backup-classic/` with MD5SUMS, 10-minute safety timer, verification with automatic rollback, boot guard `S99ttstats-guard`), `disable` (restore the classic setup), `reboot` (pre-flight checks, then reboot). Downloads the scripts from `TTS_REPO_URL` (set by configure.sh).
 
-6. **razvilka/** — optional add-on «Razvilka» (beta): home country direct, everything else via VPN, controlled from the user's own Telegram bot running on the router. Independent of TrustTunnel (works with any Keenetic VPN interface). Own installer `razvilka/razvilka-install.sh` (`--demo`, `--root=DIR` sandbox, manifest rollback, `--uninstall`) and files in `razvilka/razvilka-files/` (`core/`, `bot/`, `data/`). The bot and installer talk to the user in Russian and English (`L 'ru' 'en'`); code comments are in English. Runtime paths: `/opt/share/razvilka/`, `/opt/etc/razvilka/` (bot token `tg.env`, 600), `/opt/etc/init.d/S99razvilka`, `/opt/var/log/razvilka.log`. Released as `razvilka.tar.gz`; `configure.sh` only offers to download it (installing needs a working VPN). Keep `razvilka/README.md` and `razvilka/README_ru.md` in sync; the folder must stay self-contained so it can be moved to its own repository later.
+6. **razvilka/** — optional add-on «Razvilka» (beta): home country direct, everything else via VPN, controlled from the user's own Telegram bot running on the router. Needs TrustTunnel from this project in TUN mode (the installer checks it; it is the only tested setup). Own installer `razvilka/razvilka-install.sh` (`--demo`, `--root=DIR` sandbox, manifest rollback, `--uninstall`) and files in `razvilka/razvilka-files/` (`core/`, `bot/`, `data/`). The bot and installer talk to the user in Russian and English (`L 'ru' 'en'`); code comments are in English. Runtime paths: `/opt/share/razvilka/`, `/opt/etc/razvilka/` (bot token `tg.env`, 600), `/opt/etc/init.d/S99razvilka`, `/opt/var/log/razvilka.log`. Released as `razvilka.tar.gz`; `configure.sh` only offers to download it (installing needs a working VPN). Keep `razvilka/README.md` and `razvilka/README_ru.md` in sync; the folder must stay self-contained so it can be moved to its own repository later.
 
 ### Data Flow
 

@@ -13,11 +13,11 @@ The router builds the map of your country's networks by itself and refreshes it 
 
 > **Beta.** Tested on Keenetic Hero 4G (KN-2310, 128 MB RAM, KeeneticOS 5.1) and in a sandbox. It is off unless you install it. Please report problems in [Issues](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/issues).
 
-Razvilka works with **any VPN connection in Keenetic** (TrustTunnel, WireGuard, OpenVPN, …) — TrustTunnel is not required.
+Razvilka works with **TrustTunnel from this project in TUN mode** — the only setup it is tested with.
 
 ## Requirements
 - Keenetic with **Entware on a USB stick**.
-- A **working VPN connection** in Keenetic and devices with a VPN policy.
+- **TrustTunnel installed by this project in TUN mode** (`install.sh`, mode 2), working, and devices with a VPN policy.
 - **128 MB of RAM or more** (on 128–256 MB the installer offers a "light map").
 - Your own Telegram bot: open **@BotFather → /newbot** and keep the token.
 
@@ -36,7 +36,7 @@ Razvilka works with **any VPN connection in Keenetic** (TrustTunnel, WireGuard, 
    ```
    sh /opt/tmp/razvilka-setup/razvilka-install.sh --lang=en
    ```
-   You will be asked for your country, VPN interface and bot token, then to press "Start" in your bot (this is how the installer learns who the owner is). It shows the plan and asks for "yes".
+   You will be asked for your country and bot token, then to press "Start" in your bot (this is how the installer learns who the owner is). It shows the plan and asks for "yes".
 4. Open your bot and press **/start**.
 
 Before any change the installer backs up router settings to `/opt/backup/razvilka_<time>/` and records every step. If the VPN does not respond after installing, it **restores everything automatically**. If Razvilka is already installed, it **updates the files** and keeps your settings, lists and token.
@@ -59,7 +59,7 @@ Everything the installer added is removed in reverse order. Answer "yes" to the 
 - Long buttons (send direct, remove, switch) answer at once with «⏳ …», take the buttons away and write when done — there is nothing to press twice.
 - Alerts: VPN lost and back, low memory, map not updated. While there is no connection, alerts are queued and arrive together when it is back.
 - **🕰 Connection watchdog (optional)** — an outside service (a «dead man’s hand»): the router tells it «I am alive» every 5 minutes, and if the signals stop (no power, internet or VPN), the watchdog sends you an alarm by email or Telegram. healthchecks.io is recommended; tracker.ru (Russia) and cronitor.io work too. If the router is alive but the VPN is not, Razvilka raises the alarm at healthchecks and cronitor right away, straight through the ISP. The «🤫 Silence test» button checks that the alarm really reaches you (not every service catches silence). Instructions in the bot: ⚙️ Settings → 🕰 Connection watchdog.
-- **🛠 Self-healing** — every minute the router checks that data goes through the VPN. After 3 minutes without data, devices with a VPN policy get an instant «no DNS» instead of silence (their DNS does not answer in these minutes anyway, and without the refusal they retry without a pause and the router may hang; nothing leaks to the ISP), and the VPN connection is restarted (every 30 minutes until it is back; TrustTunnel and WireGuard by themselves, others — put the connection name `VPN_NDM=` into `net.conf`). 3 minutes after a restart that did not help, your own script `/opt/etc/razvilka/heal2.sh` runs, if it exists. To turn off: `GUARD=0` (all), `FUSE=0` (no DNS refusal) or `HEAL=0` (no restart) in `net.conf`.
+- **🛠 Self-healing** — every minute the router checks that data goes through the VPN. After 3 minutes without data, devices with a VPN policy get an instant «no DNS» instead of silence (their DNS does not answer in these minutes anyway, and without the refusal they retry without a pause and the router may hang; nothing leaks to the ISP), and TrustTunnel is restarted (every 30 minutes until it is back). 3 minutes after a restart that did not help, your own script `/opt/etc/razvilka/heal2.sh` runs, if it exists. To turn off: `GUARD=0` (all), `FUSE=0` (no DNS refusal) or `HEAL=0` (no restart) in `net.conf`.
 
 ## Troubleshooting
 - **Status says the VPN is not answering.** If 🛠 Self-healing is on (the default), the router restarts the connection by itself within minutes and tells you. If it does not recover in 15 minutes, check the VPN in the Keenetic web panel and reboot the router.

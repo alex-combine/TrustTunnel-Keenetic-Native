@@ -114,6 +114,8 @@ Run a single command on the router:
 curl -fsSL https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download/install.sh | sh
 ```
 
+The installer first asks for the language — Russian or English (or pass `--lang=ru` / `--lang=en`: `… | sh -s -- --lang=en`).
+
 > The scripts are downloaded from GitHub Releases, so GitHub counts downloads — this is the only usage statistics. Nothing about your router is sent anywhere.
 
 > The script automatically detects the latest stable version (GitHub Release).
@@ -364,7 +366,7 @@ Prefer e-mail? On the GitHub page click **Watch → Custom → Releases**.
 
 An optional add-on in [`razvilka/`](razvilka/README.md). Sites and services of your own country go direct through the ISP (fast, local banks and government sites are happy), everything else goes through the VPN. The router builds the map of your country's networks itself every night, and you control it from your own Telegram bot that runs on the router: check a site, send it direct or via VPN, switch a device, get alerts when the VPN drops.
 
-- Works with **any VPN connection in Keenetic** — TrustTunnel is not required.
+- Works with TrustTunnel from this project in **TUN mode**.
 - 💡 Hints when something local went via VPN; 🕰 an alarm when the VPN or power is gone; 🛠 restarts a hung VPN by itself and keeps the router from hanging.
 - Off unless you install it; its own installer has a dry run, rollback and `--uninstall`.
 - **Beta**: tested on Keenetic Hero 4G (KN-2310, 128 MB).

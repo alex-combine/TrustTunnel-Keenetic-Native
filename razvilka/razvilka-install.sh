@@ -78,7 +78,7 @@ if [ $LNG = ru ]; then cat <<'EOF'
   Развилка делит интернет на роутере на две дороги:
     • сайты и сервисы своей страны — напрямую, через провайдера
       (быстро; банки, госуслуги и местные сервисы не ругаются на VPN);
-    • всё остальное — через ваш VPN.
+    • всё остальное — через ваш TrustTunnel.
   Роутер сам собирает карту сетей страны и обновляет её каждую ночь.
   Управление — из вашего личного Telegram-бота:
     🔎 прислали адрес сайта — бот скажет, куда он идёт, и поменяет одной кнопкой;
@@ -86,7 +86,8 @@ if [ $LNG = ru ]; then cat <<'EOF'
     ☀️ утренняя сводка, 🕰 тревога, если пропал VPN или свет;
     🛠 VPN завис — роутер сам его перезапустит и не даст себе зависнуть.
 
-  Что понадобится: работающий VPN в Keenetic и свой бот (@BotFather → /newbot).
+  Что понадобится: работающий TrustTunnel из этого проекта (режим TUN) и свой
+  бот (@BotFather → /newbot).
   Сначала я всё проверю и покажу план — без вашего «да» ничего не меняю.
   Хотите просто посмотреть? Запустите с --demo: проверка и план, без изменений.
   Удалить потом: sh razvilka-install.sh --uninstall. Это бета: о проблемах пишите
@@ -96,7 +97,7 @@ else cat <<'EOF'
   Razvilka splits the internet on your router into two roads:
     • sites and services of your own country — direct, through your ISP
       (fast; local banks, government and other services do not complain about a VPN);
-    • everything else — through your VPN.
+    • everything else — through your TrustTunnel.
   The router builds the map of your country's networks itself and refreshes it every night.
   You control it from your own Telegram bot:
     🔎 send a site address — the bot tells where it goes and switches it with one tap;
@@ -104,7 +105,8 @@ else cat <<'EOF'
     ☀️ a morning summary, 🕰 an alarm when the VPN or power is gone;
     🛠 the VPN hangs — the router restarts it by itself and does not hang itself.
 
-  You will need: a working VPN in Keenetic and your own bot (@BotFather → /newbot).
+  You will need: a working TrustTunnel from this project (TUN mode) and your own
+  bot (@BotFather → /newbot).
   First I check everything and show the plan — nothing changes without your "yes".
   Just want a look? Run with --demo: checks and the plan, no changes.
   To remove later: sh razvilka-install.sh --uninstall. This is a beta: please report problems
@@ -134,13 +136,20 @@ WAN=$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev")
 WAN_NDM=$(ndmc -c 'show ip route' 2>/dev/null | awk '$1=="0.0.0.0/0"{print $3; exit}')
 LANIP=$(ip -4 addr show br0 2>/dev/null | awk '/inet /{sub(/\/.*/,"",$2); print $2; exit}')
 [ -n "$WAN" ] && okm "$(L 'Провайдер' 'Internet uplink'): $WAN ($WAN_NDM), $(L 'роутер' 'router') $LANIP" || bad "$(L 'Не нашёл выход в интернет напрямую' 'No direct internet uplink found')"
-# VPN: tunnels with internet access
-VPNIF=""
-for i in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | sed 's/@.*//' | grep -E '^(opkgtun|nwg|wg|tun|ovpn|ppp|l2tp|t2s)'); do
+# VPN: TrustTunnel from this project in TUN mode (the only setup Razvilka is tested with)
+VPNIF=""; TTC=/opt/trusttunnel_client/mode.conf
+TTM=$(sed -n 's/^TT_MODE="\{0,1\}\([a-z0-9]*\).*/\1/p' $TTC 2>/dev/null | tail -1)
+TTI=$(sed -n 's/^TUN_IDX="\{0,1\}\([0-9]*\).*/\1/p' $TTC 2>/dev/null | tail -1)
+if [ ! -x /opt/etc/init.d/S99trusttunnel ] || [ -z "$TTM" ]; then
+  bad "TrustTunnel: $(L 'не нашёл — Развилка работает с TrustTunnel из этого проекта (install.sh, режим TUN)' 'not found — Razvilka works with TrustTunnel from this project (install.sh, TUN mode)')"
+elif [ "$TTM" != tun ]; then
+  bad "TrustTunnel: $(L 'режим SOCKS5 — Развилке нужен режим TUN (запустите install.sh ещё раз и выберите 2)' 'SOCKS5 mode — Razvilka needs TUN mode (run install.sh again and choose 2)')"
+else
+  i=opkgtun${TTI:-0}
   c=$(curl -s -o /dev/null -w '%{http_code}' --interface $i --max-time 6 http://connectivitycheck.gstatic.com/generate_204 2>/dev/null)
-  [ "$c" = 204 ] && [ -z "$VPNIF" ] && VPNIF=$i
-done
-[ -n "$VPNIF" ] && okm "VPN: $VPNIF" || bad "VPN: $(L 'не нашёл работающий VPN — без него Развилке нечего делить' 'no working VPN found — nothing to split without it')"
+  if [ "$c" = 204 ]; then VPNIF=$i; okm "TrustTunnel: $i"
+  else bad "TrustTunnel ($i): $(L 'интернет через него не идёт — сначала добейтесь, чтобы VPN работал' 'no internet through it — get the VPN working first')"; fi
+fi
 # programs
 NEED=""; for p in curl:curl jq:jq idn:idn dig:bind-dig ipset:ipset; do command -v ${p%%:*} >/dev/null 2>&1 || NEED="$NEED ${p#*:}"; done
 [ -z "$NEED" ] && okm "$(L 'Программы на месте' 'Programs present'): curl jq idn dig ipset" || wrn "$(L 'Поставлю программы' 'Will install'):$NEED"
@@ -176,7 +185,6 @@ case "$COUNTRY" in [a-z][a-z]) ;; *) bad "$(L 'Код страны — две л
 if [ -f "$FILES/core/geo-profiles.sh" ] && ( . "$FILES/core/geo-profiles.sh"; profile $COUNTRY >/dev/null 2>&1; [ "$DNS_SPLIT" = 1 ] ); then
   command -v smartdns >/dev/null 2>&1 || [ -x "$CORE/smartdns-geo/smartdns" ] || { NEED="$NEED smartdns"; wrn "$(L 'Для страны' 'For country') $COUNTRY $(L 'нужен раздельный DNS — поставлю smartdns' 'split DNS is needed — will install smartdns')"; }
 fi
-ask "$(L 'Через какое подключение идёт VPN' 'Which interface is your VPN')" "${VPNIF:-?}"; VPNIF=$ANS
 LITE=0
 if [ $SELF = 0 ]; then   # on update the map is not touched — it is already set up
   echo "  $(L 'Для умеренных роутеров (до 256 МБ) советую лёгкую карту: только крупные блоки страны.' 'For modest routers (up to 256 MB) I suggest the light map: only large country blocks.')"
