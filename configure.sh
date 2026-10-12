@@ -128,7 +128,7 @@ esac
 [ -n "$D_VPN" ] || [ "$D_STATE" = fresh ] || [ "$D_STATE" = unclear ] || echo "  $(L '⚠ VPN сейчас не работает: обновлю только файлы и попробую запустить, режим не меняю' '⚠ The VPN does not work now: I only update files and try to start it, the mode is not changed')"
 if [ "$D_FREE" -lt 2 ] && [ "$D_STATE" != fresh ]; then
     echo "  ⛔ $(L 'На флешке меньше 2 МБ — освободите место и запустите ещё раз.' 'Less than 2 MB free on USB — free some space and run again.')"
-    [ -n "$TT_CHECK" ] || exit 1
+    [ -n "$TT_CHECK" ] || { trap - EXIT; exit 1; }
 fi
 if [ -f "$TT_JOURNAL" ] && tail -n 1 "$TT_JOURNAL" | grep -qv ' END'; then
     echo "  $(L 'Прошлый запуск прервался на шаге' 'The previous run stopped at step'): $(tail -n 1 "$TT_JOURNAL" | cut -d' ' -f3-) — $(L 'продолжу, шаги можно повторять' 'continuing, the steps are safe to repeat')"
