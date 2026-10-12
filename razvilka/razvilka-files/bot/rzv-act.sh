@@ -312,9 +312,10 @@ It works for devices that ask the router for addresses.")"; else res="$(L '😕 
     unlock; ok="${d:+$(L "✅ $d снова идёт по общему правилу." "✅ $d follows the general rule again.")
 
 }"; screen_list; scr_edit $MID "$ok" ;;
-  company_del) a=$1; MID=$2; nm=$(companies | awk -v a="$a" '$1==a{$1=""; sub(/^ /,""); print; exit}'); lock 600 || busy
-    [ -n "$nm" ] && { allow_del $a "$nm"; refresh "$(L "убрано кнопкой AS$a" "removed by button AS$a")"; }; unlock
-    ok="${nm:+$(L "✅ $nm теперь через VPN." "✅ $nm now goes via VPN.")
+  company_del) ca=$1;   # not «a»: refresh walks the company list in «a»
+    MID=$2; nm=$(companies | awk -v a="$ca" '$1==a{$1=""; sub(/^ /,""); print; exit}'); lock 600 || busy
+    [ -n "$nm" ] && { allow_del $ca "$nm"; refresh "$(L "убрано кнопкой AS$ca" "removed by button AS$ca")"; }; unlock
+    ok="${nm:+$(L "✅ $(org_name "$nm" $ca) теперь через VPN." "✅ $(org_name "$nm" $ca) now goes via VPN.")
 
 }"; screen_list; scr_edit $MID "$ok" ;;
   service_del) i=$1; MID=$2; l=$(services | awk -F'|' -v i="$i" '$1==i'); nm=$(echo "$l" | cut -d'|' -f2); lock 600 || busy
@@ -359,7 +360,9 @@ It works for devices that ask the router for addresses.")"; else res="$(L '😕 
 
 "; fi ;;
   hint_skip) a=$1; MID=$2; echo "$a   # отклонено кнопкой $(today)" >> $DENY
-    edit $MID "$(L "Хорошо, AS$a оставляю через VPN и больше не спрашиваю." "OK, AS$a stays via VPN and I will not ask again.")" ;;
-  hint_add) a=$1; MID=$2; lock 600 || busy
-    if company_add $a; then res="$(L "✅ AS$a теперь напрямую." "✅ AS$a now goes direct.")"; else res="$(L "AS$a — облако или хостинг, целиком не добавляю." "AS$a is a cloud or hosting, I do not add it as a whole.")"; fi; unlock; edit $MID "$res" ;;
+    nm=$(org_name "$(awk -v x="$a" '$2==x{$1=$2=$3=""; sub(/^ +/,""); print; exit}' $CACHE_IP 2>/dev/null)" $a)
+    edit $MID "$(L "Хорошо, $nm (AS$a) оставляю через VPN и больше про неё не спрашиваю." "OK, $nm (AS$a) stays via VPN and I will not ask about it again.")" ;;
+  hint_add) ha=$1; MID=$2; lock 600 || busy   # not «a»: refresh walks the company list in «a»
+    nm=$(org_name "$(awk -v x="$ha" '$2==x{$1=$2=$3=""; sub(/^ +/,""); print; exit}' $CACHE_IP 2>/dev/null)" $ha)
+    if company_add $ha; then res="$(L "✅ $nm (AS$ha) теперь напрямую." "✅ $nm (AS$ha) now goes direct.")"; else res="$(L "$nm (AS$ha) — облако или хостинг, целиком не добавляю." "$nm (AS$ha) is a cloud or hosting, I do not add it as a whole.")"; fi; unlock; edit $MID "$res" ;;
 esac

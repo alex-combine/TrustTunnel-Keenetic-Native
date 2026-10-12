@@ -104,7 +104,7 @@ $e"
 $e"; fi
   while IFS='|' read -r i nm a d; do row "🌐 $nm" "g:$i"; done < $W/svc
   echo "$cs" | while read -r asn nm; do [ -z "$asn" ] && continue
-    echo "$sv_a" | grep -qx "$asn" || row "🌐 $(printf '%s' "$nm" | cut -c1-30)" "c:$asn"; done
+    echo "$sv_a" | grep -qx "$asn" || row "🌐 $(org_name "$nm" $asn | cut -c1-30)" "c:$asn"; done
   n=0; [ -f $ETC/sites ] && while read -r d; do n=$((n+1)); echo "$sv_d" | grep -qxF "$d" || row "🌐 $d" "s:$n"; done < $ETC/sites
   n=0; [ -f $ETC/vpn_sites ] && while read -r d; do n=$((n+1)); row "🔒 $d" "v:$n"; done < $ETC/vpn_sites
   row "$(L '🔎 Проверить сайт' '🔎 Check a site')" add
@@ -129,7 +129,7 @@ Remove it — and it will go via VPN."
 }
 screen_company() {
   nm=$(companies | awk -v a="$1" '$1==a{$1=""; sub(/^ /,""); print; exit}'); [ -z "$nm" ] && { screen_list; return; }
-  scr "🌐 $nm
+  scr "🌐 $(org_name "$nm" $1)
 
 $(L 'Идёт напрямую. Это сети компании за рубежом, которых нет в карте страны (например, её серверы в других странах).
 
