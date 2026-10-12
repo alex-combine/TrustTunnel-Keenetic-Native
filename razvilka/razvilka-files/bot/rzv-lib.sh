@@ -190,6 +190,17 @@ vpn_marks() { ip rule 2>/dev/null | awk '$2 == "from" && $3 == "all" && $4 == "f
 policy_macs() { iptables -t mangle -S _NDM_HOTSPOT_PREROUTING_MANGL 2>/dev/null | grep -i 'set-xmark' |
   awk -v marks=" $(kv_get vpn_marks) " '{m = ""; x = ""; for (i = 1; i < NF; i++) { if ($i == "--mac-source") m = tolower($(i + 1)); if ($i == "--set-xmark") { x = $(i + 1); sub("/.*", "", x) } }
     if (m != "" && x != "" && index(marks, " " x " ")) print m}' | sort -u; }
+# A company name people can read: «HCRU-AS - JSC _RU-CENTER_, RU» → «RU-CENTER»
+org_name() {   # holder [asn]
+  o=$(printf '%s' "$1" | sed -E 's/^[A-Za-z0-9_.-]+ - //; s/,[^,]*$//; s/[_"«»]//g; s/^(JSC|PJSC|OJSC|CJSC|LLC|Llc|OOO|AO|ZAO|PAO|LTD|Ltd)\.? +//; s/ +(JSC|PJSC|LLC|Llc|LTD|Ltd|GmbH|Inc|AG|BV|B\.V)\.?$//; s/^ +| +$//g')
+  [ -n "$o" ] && printf '%s' "$o" || printf 'AS%s' "$2"
+}
+# A site name from the address itself (reverse DNS), only when it looks like a name, not like an ISP pool
+ptr_site() {
+  p=$(dig +short +time=2 +tries=1 -x "$1" @77.88.8.8 2>/dev/null | head -1 | sed 's/\.$//')
+  case "$p" in ''|*[0-9]-[0-9]*|*static*|*dynamic*|*pool*|*dsl*|*client*|*broadband*|*customer*|*ip-*|*in-addr*) return 0;; esac
+  echo "$p" | awk -F. 'NF>=2{print $(NF-1)"."$NF}'
+}
 kn() { v=$(kv_get "$1" 0); case "$v" in ''|*[!0-9]*) echo 0;; *) echo "$v";; esac; }   # numeric kv value, 0 if broken
 heal_known() {   # does the self-healing know how to restart this VPN connection?
   [ -n "$VPN_NDM" ] && return 0

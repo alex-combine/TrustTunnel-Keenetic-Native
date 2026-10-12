@@ -277,7 +277,7 @@ site_card() {   # domain → card; card data is kept in kv card
   dgeo=0; ipset test DR_GEO_$GROUP $ip 2>&1 | grep -q 'is in set' && dgeo=1
   ddom=0; ipset test _NDM_OGDN_4_@$GROUP $ip 2>&1 | grep -q 'is in set' && ddom=1
   den=0; { asn_in $DENY $asn || echo "$holder" | grep -qiE "$HOSTING_RE"; } && den=1
-  org=$(printf '%s' "$holder" | sed 's/,[[:space:]]*[A-Z][A-Z]$//; s/^[A-Z0-9-]* - //'); [ -z "$org" ] && org="AS$asn"
+  org=$(org_name "$holder" $asn)
   lc=$(echo "$cc" | tr A-Z a-z)
   if [ -z "$cc" ]; then fl='?'; elif known_cc $lc; then fl="$(flag $lc) $(cname $lc)"; else fl="🌍 $cc"; fi
   CC=$(country | tr a-z A-Z)

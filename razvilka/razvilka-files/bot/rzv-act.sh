@@ -98,11 +98,11 @@ watch() {
   grep " dst=$tip " /proc/net/nf_conntrack 2>/dev/null | awk -v M=" $(echo $macs) " '
     { mac=""; if (match($0,/mac=[0-9a-f:]+/)) mac=substr($0,RSTART+4,17); if (index(M," " mac " ")==0) next
       d=""; b=0; nb=0; for(i=1;i<=NF;i++){ if($i ~ /^dst=/ && d=="") d=substr($i,5); if($i ~ /^bytes=/){b+=substr($i,7); nb++} }
-      if (d!="" && nb>=2) f[d]+=b }
-    END { for (d in f) print f[d], d }' | sort -rn | head -40 > $W/flows
+      if (d!="" && nb>=2) { f[d]+=b; if (b>mb[d]) {mb[d]=b; mm[d]=mac} } }
+    END { for (d in f) print f[d], d, mm[d] }' | sort -rn | head -40 > $W/flows   # bytes, address, the device that used it most
   [ -s $W/flows ] || return 0
-  CC=$(country | tr a-z A-Z); stale=''; hints=0; nowt=$(now)
-  while read -r by ip; do
+  CC=$(country | tr a-z A-Z); stale=''; hints=0; nowt=$(now); device_list > $W/devs 2>/dev/null
+  while read -r by ip dmac; do
     cat $R_FILE $GEO_FILE 2>/dev/null | awk -v IP=$ip "$NET2INT"' BEGIN{x=ip2n(IP)} /\//{rng($1); if(x>=S&&x<=E){f=1; exit}} END{exit !f}' && continue   # -v: the IP must be known in BEGIN
     set -- $(owner $ip); asn=$1; cc=$2; shift 2; holder="$*"; [ "$asn" = 0 ] && continue
     if asn_in $ALLOW $asn && ! asn_in $DENY $asn; then
@@ -111,11 +111,27 @@ watch() {
     elif [ "$cc" = "$CC" ] && ! asn_in $DENY $asn && [ $by -ge $HINT_MIN_BYTES ] && ! grep -q "^$asn " $HINTED 2>/dev/null \
          && ! echo "$holder" | grep -qiE "$HOSTING_RE" && [ $hints -lt 5 ]; then
       hints=$((hints+1)); echo "$asn $(today)" >> $HINTED; log "watch: кандидат AS$asn $holder ($ip, $((by/1024)) КБ через VPN)"
-      org=$(printf '%s' "$holder" | sed 's/^[A-Z0-9-]* - //; s/,[^,]*$//'); [ -z "$org" ] && org="AS$asn"; mb=$((by/1048576)); [ $mb -lt 1 ] && mb=1
+      org=$(org_name "$holder" $asn); site=$(ptr_site $ip)
+      dev=$(awk -v m="$dmac" '$1==m{$1=""; $2=""; sub(/^ +/,""); print; exit}' $W/devs); [ -z "$dev" ] && dev=$dmac
+      if [ $by -ge 1048576 ]; then sz="$((by/1048576)) $(L МБ MB)"; else sz="$((by/1024)) $(L КБ KB)"; fi
+      ln=''; [ -n "$site" ] && ln="
+🌐 $(L 'Сайт' 'Site'): $site"
       : > $SKB; row "$(L '🌐 Пустить напрямую' '🌐 Send direct')" "add:$asn" "$(L 'Не надо' 'No, thanks')" "skip:$asn"
-      send "$(L "💡 Похоже, что-то от «$org» открывалось через VPN ($mb МБ).
-Это компания из твоей страны, но её адресов нет в карте. Пустить её напрямую?" "💡 Looks like something from «$org» opened via VPN ($mb MB).
-This company is from your home country, but its addresses are not in the map. Let it go direct?")" "$(kb_json $SKB)"
+      send "$(L "💡 Через VPN шло что-то из своей страны
+
+🏢 Компания: $org$ln
+📱 Устройство: $dev
+📦 Через VPN: $sz
+
+Это компания из твоей страны, но её адресов ещё нет в карте страны, поэтому шло через VPN.
+Узнаёшь (банк, магазин, сервис) — пусти напрямую. Не узнаёшь — «Не надо», ничего не сломается." "💡 Something from your home country went via VPN
+
+🏢 Company: $org$ln
+📱 Device: $dev
+📦 Via VPN: $sz
+
+This company is from your home country, but its addresses are not in the country map yet, so it went via VPN.
+Recognise it (a bank, a shop, a service)? Let it go direct. Don't? «No, thanks» — nothing breaks.")" "$(kb_json $SKB)"
     fi
   done < $W/flows
   [ -n "$stale" ] && { log "watch: адреса компаний из списка шли через VPN:$stale"; refresh "$(L 'найдено в соединениях' 'found in connections')" $stale; }   # the lock is already taken in "watch)"

@@ -21,6 +21,8 @@
   after removing an exception the bot named another site (the list screen reused the variable);
   the «already in the country map» check never matched (`awk IP=…` is not set in `BEGIN`, now `-v`),
   so hints could suggest companies that already go direct and the site card missed company exceptions.
+- **Readable hints:** the company name without registry codes («HCRU-AS - JSC _RU-CENTER_, RU» → «RU-CENTER»),
+  the device that used it, the site name when the address tells it, and a plain tip which button to press.
 - **Hints work again:** the group is written as «@policy» (every device with a VPN policy), and the hint
   check took that word for a device name, so it never found a single connection. Now it reads the group
   like direct-routes.sh does.
