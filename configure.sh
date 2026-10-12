@@ -317,6 +317,7 @@ fi
 
 # === Attach mode support (dashboard statistics) needs client >= 1.0.62 ===
 CLIENT_VERSION=""
+ATTACH=""
 if [ -x /opt/trusttunnel_client/trusttunnel_client ]; then
     CLIENT_VERSION=$(/opt/trusttunnel_client/trusttunnel_client --version 2>/dev/null | awk '{print $2; exit}')
 fi
@@ -325,6 +326,7 @@ if [ "$TT_MODE" = "tun" ] && [ -n "$CLIENT_VERSION" ]; then
             split(a, x, "."); split(b, y, ".")
             for (i = 1; i <= 3; i++) { if (x[i] + 0 > y[i] + 0) exit 0; if (x[i] + 0 < y[i] + 0) exit 1 }
             exit 0 }'; then
+        ATTACH=1
         echo "$(L "Клиент $CLIENT_VERSION умеет режим подключения к устройству (статистика в веб-панели)." "Client $CLIENT_VERSION supports attach mode (dashboard statistics).")"
     else
         echo "$(L "ВНИМАНИЕ: клиент $CLIENT_VERSION старше 1.0.62 и не может подключиться к устройству KeeneticOS." "WARNING: client $CLIENT_VERSION is older than 1.0.62 and cannot attach to the KeeneticOS device.")"
@@ -332,59 +334,242 @@ if [ "$TT_MODE" = "tun" ] && [ -n "$CLIENT_VERSION" ]; then
     fi
 fi
 
-# === Razvilka (beta, optional): home country direct, everything else via VPN ===
-RZV_DIR="/opt/tmp/razvilka-setup"
-RZV_GOT=""
+# === Client config and first start: automatic, checked, rolled back on failure ===
+TT_DIR="/opt/trusttunnel_client"
+CFG="$TT_DIR/trusttunnel_client.toml"
+TT_IF="opkgtun${TUN_IDX}"
+CHECK_URL="http://connectivitycheck.gstatic.com/generate_204"
+VPN_OK=""
+MANUAL=""
+TS=$(date +%Y%m%d_%H%M%S)
+
+vpn_check() {  # up to 2 minutes: does the internet answer through the tunnel?
+    _n=0
+    while [ $_n -lt 12 ]; do
+        if [ "$TT_MODE" = "tun" ]; then
+            _c=$(curl -s -o /dev/null -w '%{http_code}' --interface "$TT_IF" --max-time 5 "$CHECK_URL" 2>/dev/null) || _c=""
+        else
+            _c=$(curl -s -o /dev/null -w '%{http_code}' --socks5-hostname 127.0.0.1:1080 --max-time 5 "$CHECK_URL" 2>/dev/null) || _c=""
+        fi
+        [ "$_c" = "204" ] && return 0
+        sleep 5; _n=$((_n + 1))
+    done
+    return 1
+}
+
+# Rewrite the listener for the chosen mode and keep the kill switch on.
+# TUN: attach to the firmware device opkgtunN, Keenetic does the routing and DNS.
+tt_fix_config() {  # $1 = file from setup_wizard, $2 = result
+    awk -v mode="$TT_MODE" -v dev="$TT_IF" '
+        /^\[/ {
+            sec = $0; sub(/[[:space:]]*(#.*)?$/, "", sec); seen = 1
+            if (sec == "[listener.tun]" || sec == "[listener.socks]") { drop = 1; next }
+            drop = 0; print
+            if (sec == "[listener]") {
+                print ""
+                if (mode == "tun") {
+                    print "[listener.tun]"
+                    print "device_name = \"" dev "\""
+                    print "use_existing = true"
+                    print "bound_if = \"\""
+                    print "included_routes = []"
+                    print "excluded_routes = []"
+                    print "mtu_size = 1280"
+                    print "change_system_dns = false"
+                } else {
+                    print "[listener.socks]"
+                    print "address = \"127.0.0.1:1080\""
+                    print "username = \"\""
+                    print "password = \"\""
+                }
+                print ""
+            }
+            next
+        }
+        drop { next }
+        !seen && /^[[:space:]]*killswitch_enabled[[:space:]]*=/ { print "killswitch_enabled = true"; next }
+        { print }
+    ' "$1" > "$2"
+    grep -q '^killswitch_enabled' "$2" || { printf 'killswitch_enabled = true\n' > "$2.ks"; cat "$2" >> "$2.ks"; mv "$2.ks" "$2"; }
+}
+
+find_endpoint_config() {  # the file exported on the server: config.toml in the usual places
+    for _f in /opt/tmp/config.toml /opt/config.toml "$TT_DIR/config.toml" /tmp/config.toml /opt/root/config.toml /root/config.toml; do
+        [ -f "$_f" ] && grep -q 'hostname' "$_f" 2>/dev/null && { echo "$_f"; return 0; }
+    done
+    return 1
+}
+
 echo ""
 echo "--------------------------------------------------------------------"
-if [ "$TT_LANG" = ru ]; then cat <<'REOF'
+echo " $(L 'Настройка клиента и первый запуск' 'Client setup and first start')"
+echo "--------------------------------------------------------------------"
+if [ ! -x "$TT_DIR/trusttunnel_client" ] || [ ! -x "$TT_DIR/setup_wizard" ]; then
+    echo "$(L 'Клиента TrustTunnel нет — настраивать нечего. Запустите установщик ещё раз и ответьте «д» на вопрос о клиенте.' 'No TrustTunnel client — nothing to set up. Run the installer again and answer "y" to the client question.')"
+    MANUAL=1
+elif [ "$TT_MODE" = "tun" ] && [ -z "$ATTACH" ]; then
+    echo "$(L 'Клиент старше 1.0.62 — обновите его (запустите установщик ещё раз) или настройте по инструкции ниже.' 'The client is older than 1.0.62 — update it (run the installer again) or set it up by the steps below.')"
+    MANUAL=1
+else
+    KEEP=""
+    NEW=""
+    if [ -f "$CFG" ] && grep -q '^\[endpoint\]' "$CFG"; then
+        if ask_yes_no "$(L 'Файл настроек клиента уже есть. Оставить его как есть?' 'A client config already exists. Keep it as it is?')"; then
+            KEEP=1
+        fi
+    fi
+    if [ -z "$KEEP" ]; then
+        SRC=$(find_endpoint_config) || SRC=""
+        if [ -n "$SRC" ]; then
+            echo "$(L 'Нашёл файл с сервера' 'Found the server file'): $SRC"
+        else
+            echo "$(L 'Нужен файл config.toml, который вы выгрузили на сервере (см. README, шаг 1).' 'I need the config.toml you exported on the server (see README, step 1).')"
+            echo "$(L 'Положите его, например, в /opt/tmp/ и укажите путь. Можно вставить и ссылку tt://…' 'Put it, for example, into /opt/tmp/ and give the path. A tt://… link works too.')"
+            printf "%s: " "$(L 'Путь к config.toml (Enter — пропустить)' 'Path to config.toml (Enter — skip)')"
+            read -r SRC < /dev/tty || SRC=""
+        fi
+        if [ -z "$SRC" ]; then
+            MANUAL=1
+        else
+            mkdir -p /opt/tmp
+            WORK=$(mktemp -d /opt/tmp/tt_setup.XXXXXX)
+            chmod 700 "$WORK"
+            case "$SRC" in
+                tt://*) "$TT_DIR/setup_wizard" -m non-interactive -d "$SRC" --settings "$WORK/raw.toml" >/dev/null 2>&1 || true ;;
+                *)      "$TT_DIR/setup_wizard" -m non-interactive -e "$SRC" --settings "$WORK/raw.toml" >/dev/null 2>&1 || true ;;
+            esac
+            if [ -s "$WORK/raw.toml" ] && grep -q '^\[endpoint\]' "$WORK/raw.toml" && grep -q '^\[listener\]' "$WORK/raw.toml"; then
+                tt_fix_config "$WORK/raw.toml" "$WORK/new.toml"
+            fi
+            if [ -s "$WORK/new.toml" ] && grep -q '^\[endpoint\]' "$WORK/new.toml" && grep -q '^killswitch_enabled = true' "$WORK/new.toml" && \
+               { [ "$TT_MODE" != "tun" ] || grep -q "^device_name = \"$TT_IF\"" "$WORK/new.toml"; } && \
+               { [ "$TT_MODE" = "tun" ] || grep -q '^address = "127.0.0.1:1080"' "$WORK/new.toml"; }; then
+                [ -f "$CFG" ] && cp -p "$CFG" "$CFG.bak_$TS"
+                cp "$WORK/new.toml" "$CFG"
+                chmod 600 "$CFG"
+                [ -f "$SRC" ] && chmod 600 "$SRC"
+                NEW=1
+                echo "$(L 'Файл настроек клиента готов, kill switch включён.' 'Client config is ready, kill switch on.')"
+                [ -f "$CFG.bak_$TS" ] && echo "$(L 'Прежний файл сохранён' 'The previous file is kept as'): $CFG.bak_$TS"
+            else
+                echo "$(L 'Не смог собрать файл настроек из этого файла — настройте по инструкции ниже.' 'Could not build the client config from this file — set it up by the steps below.')"
+                MANUAL=1
+            fi
+            rm -rf "$WORK"
+        fi
+    fi
+    if [ -z "$MANUAL" ]; then
+        echo "$(L 'Запускаю VPN и проверяю, что интернет идёт через него (до 2 минут)...' 'Starting the VPN and checking that the internet goes through it (up to 2 minutes)...')"
+        /opt/etc/init.d/S99trusttunnel restart >/dev/null 2>&1 || true
+        if vpn_check; then
+            VPN_OK=1
+            echo "✅ $(L 'VPN работает: интернет идёт через TrustTunnel.' 'The VPN works: the internet goes through TrustTunnel.')"
+        else
+            echo "⛔ $(L 'Интернет через VPN не пошёл за 2 минуты.' 'No internet through the VPN within 2 minutes.')"
+            if [ -n "$NEW" ]; then
+                /opt/etc/init.d/S99trusttunnel stop >/dev/null 2>&1 || true
+                mv "$CFG" "$CFG.failed_$TS"
+                chmod 600 "$CFG.failed_$TS"
+                if [ -f "$CFG.bak_$TS" ]; then
+                    cp -p "$CFG.bak_$TS" "$CFG"
+                    /opt/etc/init.d/S99trusttunnel start >/dev/null 2>&1 || true
+                fi
+                echo "   $(L 'Вернул как было: VPN остановлен, новый файл сохранён как' 'Rolled back: the VPN is stopped, the new file is kept as') $CFG.failed_$TS"
+            fi
+            echo "   $(L 'Что пошло не так — последние строки журнала:' 'What went wrong — the last log lines:')"
+            tail -n 5 /opt/var/log/trusttunnel.log 2>/dev/null | sed 's/^/     /' || true
+            echo "   $(L 'Частые причины: сервер выключен, неверный файл с сервера, порт закрыт. Исправьте и запустите установщик ещё раз.' 'Common causes: the server is down, a wrong server file, a closed port. Fix it and run the installer again.')"
+        fi
+    fi
+fi
+
+# === Razvilka (beta, optional): home country direct, everything else via VPN ===
+RZV_DIR="/opt/tmp/razvilka-setup"
+RZV_DONE=""
+rzv_get() {
+    mkdir -p "$RZV_DIR"
+    if curl -fsSL "$REPO_URL/razvilka.tar.gz" -o /opt/tmp/razvilka.tar.gz && tar xzf /opt/tmp/razvilka.tar.gz -C "$RZV_DIR"; then
+        rm -f /opt/tmp/razvilka.tar.gz; return 0
+    fi
+    rm -f /opt/tmp/razvilka.tar.gz
+    echo "$(L 'Не удалось скачать Развилку (нет в этом выпуске?). Как взять её потом — в razvilka/README_ru.md.' 'Could not download Razvilka (not attached to this release?). See razvilka/README.md to get it later.')"
+    return 1
+}
+if [ "$TT_MODE" != "tun" ]; then
+    echo ""
+    echo "$(L 'Развилке (своя страна напрямую, бот в Telegram) нужен режим TUN — в режиме SOCKS5 её не предлагаю.' 'Razvilka (home country direct, a Telegram bot) needs TUN mode — not offered in SOCKS5 mode.')"
+elif [ -z "$VPN_OK" ]; then
+    echo ""
+    echo "$(L 'Развилку (своя страна напрямую, бот в Telegram) можно будет поставить, когда VPN заработает: запустите установщик ещё раз — он предложит.' 'Razvilka (home country direct, a Telegram bot) can be installed once the VPN works: run the installer again — it will offer it.')"
+elif [ "$TT_MODE" = "tun" ]; then
+    echo ""
+    echo "--------------------------------------------------------------------"
+    if [ "$TT_LANG" = ru ]; then cat <<'REOF'
  Развилка (по желанию, бета) - две дороги для домашнего интернета
 --------------------------------------------------------------------
  * Банки, госуслуги и местные сервисы своей страны открываются напрямую:
    быстро, и они перестают ругаться на VPN.
  * Всё остальное по-прежнему идёт через ваш TrustTunnel.
- * Свой Telegram-бот на роутере: проверить любой сайт и переключить его
-   одной кнопкой, правило для каждого устройства, утренняя сводка,
-   тревога, если VPN пропал, а зависший VPN роутер перезапустит сам.
- Сейчас она только скачается - ничего не изменится. Попробовать потом
- можно пробой (--demo), которая ничего не меняет; удалить - одной
- командой. Нужен TrustTunnel в режиме TUN. Подробнее: razvilka/README_ru.md
+ * Свой Telegram-бот: проверить любой сайт и переключить его одной кнопкой,
+   правило для каждого устройства, утренняя сводка, тревога, если VPN
+   пропал, а зависший VPN роутер перезапустит сам.
+ * Бот живёт прямо на роутере - без серверов и облаков. Берёт около 1 МБ
+   на флешке и около 8 МБ оперативной памяти; процессор почти не трогает
+   (короткая проверка раз в минуту, сборка карты страны - ночью).
+ Сначала покажет план и спросит «да»; удалить - одной командой.
+ Подробнее: razvilka/README_ru.md
 REOF
-else cat <<'REOF'
+    else cat <<'REOF'
  Razvilka (optional, beta) - two roads for your home internet
 --------------------------------------------------------------------
  * Banks, government and local services of your country open directly:
    fast, and they stop complaining about the VPN.
  * Everything else stays behind your TrustTunnel.
- * Your own Telegram bot on the router: check any site and switch it with
-   one tap, per-device rules, a morning summary, an alarm if the VPN drops,
+ * Your own Telegram bot: check any site and switch it with one tap,
+   per-device rules, a morning summary, an alarm if the VPN drops,
    and the router restarts a hung VPN by itself.
- Now it is only downloaded - nothing changes. Try it later with a dry run
- (--demo) that changes nothing; remove it with one command. Needs
- TrustTunnel in TUN mode. More: razvilka/README.md
+ * The bot lives on the router itself - no servers, no cloud. It takes
+   about 1 MB on the USB stick and about 8 MB of RAM; the CPU stays almost
+   idle (a short check once a minute, the country map is built at night).
+ It shows the plan first and asks "yes"; removal is one command.
+ More: razvilka/README.md
 REOF
-fi
-if ask_yes_no "$(L 'Скачать Развилку, чтобы попробовать потом?' 'Download Razvilka to try it later?')"; then
-    mkdir -p "$RZV_DIR"
-    if curl -fsSL "$REPO_URL/razvilka.tar.gz" -o /opt/tmp/razvilka.tar.gz && tar xzf /opt/tmp/razvilka.tar.gz -C "$RZV_DIR"; then
-        RZV_GOT="yes"
-        echo "$(L 'Развилка скачана в' 'Razvilka downloaded to') $RZV_DIR"
-    else
-        echo "$(L 'Не удалось скачать Развилку (нет в этом выпуске?). Как взять её потом — в razvilka/README_ru.md.' 'Could not download Razvilka (not attached to this release?). See razvilka/README.md to get it later.')"
     fi
-    rm -f /opt/tmp/razvilka.tar.gz
-else
-    echo "$(L 'Развилку не скачиваю. Взять её можно в любой момент: razvilka/README_ru.md' 'Razvilka skipped. You can get it any time: see razvilka/README.md')"
+    if ask_yes_no "$(L 'Поставить Развилку сейчас?' 'Install Razvilka now?')"; then
+        if rzv_get; then
+            sh "$RZV_DIR/razvilka-install.sh" --lang="$TT_LANG" < /dev/tty || true
+            [ -x /opt/etc/init.d/S99razvilka ] && [ -f /opt/etc/razvilka/tg.env ] && RZV_DONE=1
+        fi
+    else
+        echo "$(L 'Хорошо. Захотите потом — запустите установщик ещё раз, он предложит снова.' 'OK. If you want it later, run the installer again — it will offer it again.')"
+    fi
 fi
 
 echo ""
 echo "=== $(L 'Установка завершена' 'Installation completed') ==="
 echo ""
-echo "$(L 'Что дальше:' 'Next steps:')"
+if [ -n "$VPN_OK" ]; then
+    echo "✅ $(L 'TrustTunnel работает и запускается сам после перезагрузки роутера.' 'TrustTunnel works and starts by itself after a router reboot.')"
+    [ "$TT_MODE" = "tun" ] && echo "   $(L 'Статистика в веб-панели и проверка' 'Dashboard statistics and a check'): tt-stats status"
+    echo "   $(L 'Журнал' 'Log'): /opt/var/log/trusttunnel.log"
+    echo "   $(L 'Если что-то не так — выключить VPN' 'If something is wrong — turn the VPN off'): /opt/etc/init.d/S99trusttunnel stop"
+    [ -n "$RZV_DONE" ] && echo "   $(L 'Развилка: откройте своего бота в Telegram и нажмите /start' 'Razvilka: open your bot in Telegram and press /start')"
+    echo ""
+    exit 0
+fi
+if [ -z "$MANUAL" ]; then
+    echo "⛔ $(L 'VPN не заработал — причина выше, всё возвращено как было. Исправьте её и запустите установщик ещё раз.' 'The VPN did not start — the reason is above, everything is rolled back. Fix it and run the installer again.')"
+    echo ""
+    exit 0
+fi
+echo "$(L 'Проще всего: положите config.toml с сервера в /opt/tmp/ и запустите установщик ещё раз — он всё настроит и проверит сам.' 'Easiest: put the config.toml from the server into /opt/tmp/ and run the installer again — it sets up and checks everything itself.')"
+echo ""
+echo "$(L 'Или вручную:' 'Or by hand:')"
 echo "1. $(L 'Создайте файл настроек клиента' 'Create a configuration file') /opt/trusttunnel_client/trusttunnel_client.toml"
+echo "   cd /opt/trusttunnel_client && ./setup_wizard --mode non-interactive --endpoint_config config.toml --settings trusttunnel_client.toml"
 if [ "$TT_MODE" = "tun" ]; then
     echo ""
-    echo "   $(L 'Добавьте в него раздел [listener.tun]:' 'Add the [listener.tun] section to the client configuration:')"
+    echo "   $(L 'Замените в нём раздел [listener.tun] на:' 'Replace the [listener.tun] section with:')"
     echo "   [listener.tun]"
     echo "   device_name = \"opkgtun${TUN_IDX}\""
     echo "   use_existing = true"
@@ -397,7 +582,7 @@ if [ "$TT_MODE" = "tun" ]; then
     echo "   создала для OpkgTun${TUN_IDX}, и статистика трафика видна в веб-панели"
     echo "   (нужен клиент от 1.0.62). Без этих двух строк работает классический режим."
     echo ""
-    echo "   В начале файла рекомендуем: killswitch_enabled = true"
+    echo "   В начале файла должно быть: killswitch_enabled = true"
     echo "   (иначе, если сервер недоступен, клиент пускает трафик напрямую)."
     echo ""
     echo "   Раздела [listener.socks] в файле быть не должно."
@@ -409,7 +594,7 @@ if [ "$TT_MODE" = "tun" ]; then
     echo "   created for OpkgTun${TUN_IDX}, so traffic statistics appear in the web UI"
     echo "   (needs client >= 1.0.62). Without these two lines the classic mode is used."
     echo ""
-    echo "   Recommended at the top of the file: killswitch_enabled = true"
+    echo "   At the top of the file: killswitch_enabled = true"
     echo "   (otherwise the client sends traffic directly when the server is unreachable)."
     echo ""
     echo "   The [listener.socks] section should not be in the file."
@@ -426,12 +611,6 @@ echo ""
 echo "2. $(L 'Запустите службу' 'Start the service'): /opt/etc/init.d/S99trusttunnel start"
 if [ "$TT_MODE" = "tun" ]; then
     echo "3. $(L 'Проверьте статистику в веб-панели' 'Check dashboard statistics'): tt-stats status"
-fi
-if [ -n "$RZV_GOT" ]; then
-    echo ""
-    echo "$(L 'Развилка (когда VPN заработает)' 'Razvilka (when the VPN works)'):"
-    echo "   sh $RZV_DIR/razvilka-install.sh --demo --lang=$TT_LANG   ($(L 'проба, ничего не меняет' 'dry run, changes nothing'))"
-    echo "   sh $RZV_DIR/razvilka-install.sh --lang=$TT_LANG          ($(L 'установка; --uninstall — удалить' 'install; --uninstall to remove'))"
 fi
 echo ""
 

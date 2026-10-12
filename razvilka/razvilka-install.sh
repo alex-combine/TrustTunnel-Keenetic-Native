@@ -34,7 +34,7 @@ ask() {  # ask "question" "default" → $ANS
   if [ $YES = 1 ]; then ANS=$2; echo "  ❓ $1 [$2] → $2"; return; fi
   printf '  ❓ %s [%s]: ' "$1" "$2"; read -r ANS; [ -n "$ANS" ] || ANS=$2
 }
-is_yes() { case "$1" in да|Да|ДА|y|Y|yes|Yes|YES) return 0;; esac; return 1; }
+is_yes() { case "$1" in да|Да|ДА|д|Д|y|Y|yes|Yes|YES) return 0;; esac; return 1; }
 # system change: in a test into a folder — only print
 sys() { if [ -n "$R" ]; then echo "     [проба] $*"; else sh -c "$*"; fi; }
 note() { mkdir -p "$R$ETC"; echo "$*" >> "$R$MAN"; }    # manifest: what was done (for rollback)
@@ -86,6 +86,10 @@ if [ $LNG = ru ]; then cat <<'EOF'
     ☀️ утренняя сводка, 🕰 тревога, если пропал VPN или свет;
     🛠 VPN завис — роутер сам его перезапустит и не даст себе зависнуть.
 
+  Бот живёт прямо на роутере — без серверов и облаков. Берёт около 1 МБ на флешке
+  и около 8 МБ оперативной памяти; процессор почти не трогает (короткая проверка
+  раз в минуту, сборка карты страны — ночью, около 1–2 минут).
+
   Что понадобится: работающий TrustTunnel из этого проекта (режим TUN) и свой
   бот (@BotFather → /newbot).
   Сначала я всё проверю и покажу план — без вашего «да» ничего не меняю.
@@ -104,6 +108,10 @@ else cat <<'EOF'
     📱 a rule per device; 💡 a hint when something local went via VPN;
     ☀️ a morning summary, 🕰 an alarm when the VPN or power is gone;
     🛠 the VPN hangs — the router restarts it by itself and does not hang itself.
+
+  The bot lives on the router itself — no servers, no cloud. It takes about 1 MB on the
+  USB stick and about 8 MB of RAM; the CPU stays almost idle (a short check once a minute,
+  the country map is built at night in about 1–2 minutes).
 
   You will need: a working TrustTunnel from this project (TUN mode) and your own
   bot (@BotFather → /newbot).

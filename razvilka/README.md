@@ -21,13 +21,19 @@ Razvilka works with **TrustTunnel from this project in TUN mode** — the only s
 - **128 MB of RAM or more** (on 128–256 MB the installer offers a "light map").
 - Your own Telegram bot: open **@BotFather → /newbot** and keep the token.
 
+## How much it takes from the router
+The bot lives on the router itself — no servers, no cloud.
+- **USB stick:** about 1 MB (the bot and the core ~0.2 MB, the country map and caches ~0.5 MB, the log). If `jq`, `idn` or `dig` are missing, the installer adds them from Entware (a few hundred KB).
+- **RAM:** about 8 MB all the time (the bot ~1 MB plus its connection waiting for Telegram ~7 MB); the country map in the router's tables ~0.2 MB. The nightly map rebuild needs 12 MB free and waits if there is less.
+- **CPU:** almost idle — a short VPN check once a minute, checks every 5–10 minutes, the country map rebuild at night (about 1–2 minutes).
+
 ## Install
 1. SSH into the router and download the package:
    ```
    mkdir -p /opt/tmp/razvilka-setup && cd /opt/tmp/razvilka-setup
    curl -fsSL https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download/razvilka.tar.gz | tar xzf -
    ```
-   (`configure.sh` of this project offers to download it at the end of the setup.)
+   (Easier: the main installer of this project offers to install Razvilka at the very end, once the VPN works.)
 2. Run a **dry run** first — it changes nothing:
    ```
    sh /opt/tmp/razvilka-setup/razvilka-install.sh --demo --lang=en

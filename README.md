@@ -104,7 +104,7 @@ cd /opt/trusttunnel/
 ./trusttunnel_endpoint vpn.toml hosts.toml -c client_name -a server_public_ip --format toml > config.toml
 ```
 
-This will create a `config.toml` file that you need to transfer to the router.
+This will create a `config.toml` file. Copy it to the router into `/opt/tmp/` (for example with WinSCP or `scp config.toml root@192.168.1.1:/opt/tmp/`) — the installer finds it there by itself.
 
 ### 2. Installing Client on Keenetic
 
@@ -137,6 +137,8 @@ The installation script will perform the following:
 5. Save the selected mode to `/opt/trusttunnel_client/mode.conf`
 6. Prompt to create an interface (ProxyN for SOCKS5 or OpkgTunN for TUN) in Keenetic; when changing the mode or index, it will delete the old interface
 7. Prompt to install/update the TrustTunnel client (supported architectures: x86_64, aarch64, armv7, mips, mipsel)
+8. Find the `config.toml` exported on the server (in `/opt/tmp/` and other usual places, or ask for its path or a `tt://` link), build the client config from it (the right listener for the mode, kill switch on, file closed with 600), start the VPN and check that the internet really goes through it. If it does not within 2 minutes, roll back and show the last log lines
+9. In TUN mode, when the VPN works: offer to install Razvilka right away (optional)
 
 ### Mode Comparison
 
@@ -149,6 +151,8 @@ The installation script will perform the following:
 | Requirements | — | `ip-full` package in Entware, IP address from VPN server |
 
 #### Client Configuration
+
+> The installer does this by itself (step 8 above): just put `config.toml` into `/opt/tmp/` before running it. The steps below are for setting it up by hand.
 
 Generate the configuration from the file exported from the server:
 
@@ -371,7 +375,7 @@ An optional add-on in [`razvilka/`](razvilka/README.md). Sites and services of y
 - Off unless you install it; its own installer has a dry run, rollback and `--uninstall`.
 - **Beta**: tested on Keenetic Hero 4G (KN-2310, 128 MB).
 
-`configure.sh` offers to download it at the end of the setup, or see [razvilka/README.md](razvilka/README.md).
+The installer offers it at the very end, once the VPN works; or see [razvilka/README.md](razvilka/README.md).
 
 ## File Structure
 

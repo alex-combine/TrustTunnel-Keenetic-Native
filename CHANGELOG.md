@@ -46,6 +46,15 @@
 - **The installer speaks Russian and English:** `install.sh` asks for the language first (or `--lang=ru|en`),
   every question and hint of `configure.sh` follows it (yes is `y` or `д`), and the Razvilka commands it prints
   carry the same language.
+- **One installer from start to a working VPN:** `configure.sh` now finds the `config.toml` exported on the
+  server (`/opt/tmp/` and other usual places, or asks for its path or a `tt://` link), builds the client config
+  itself (listener for the chosen mode — attach in TUN, kill switch on, files closed with 600), starts the VPN
+  and checks for 2 minutes that the internet really goes through it. If it does not, it rolls back (the
+  previous config comes back) and shows the last log lines. On a re-run an existing config can be kept.
+- **Razvilka right at the end:** in TUN mode, once the VPN works, the installer offers «Install Razvilka now?»
+  and runs its installer in the same language (its own plan and «yes»). The offer says what it takes from the
+  router: about 1 MB on the USB stick, about 8 MB of RAM, an almost idle CPU; the same is in the Razvilka
+  installer and README.
 
 ## v2.3.2 — the router does not choke when the VPN drops at night
 
