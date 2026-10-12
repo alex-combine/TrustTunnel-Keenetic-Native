@@ -152,6 +152,8 @@ if [ ! -x /opt/etc/init.d/S99trusttunnel ] || [ -z "$TTM" ]; then
   bad "TrustTunnel: $(L 'не нашёл — Развилка работает с TrustTunnel из этого проекта (install.sh, режим TUN)' 'not found — Razvilka works with TrustTunnel from this project (install.sh, TUN mode)')"
 elif [ "$TTM" != tun ]; then
   bad "TrustTunnel: $(L 'режим SOCKS5 — Развилке нужен режим TUN (запустите install.sh ещё раз и выберите 2)' 'SOCKS5 mode — Razvilka needs TUN mode (run install.sh again and choose 2)')"
+elif ! grep -q '^[[:space:]]*use_existing[[:space:]]*=[[:space:]]*true' /opt/trusttunnel_client/trusttunnel_client.toml 2>/dev/null; then
+  bad "TrustTunnel: $(L 'классический режим — сначала включите новый: tt-stats enable --reboot' 'classic mode — switch to the new one first: tt-stats enable --reboot')"
 else
   i=opkgtun${TTI:-0}
   c=$(curl -s -o /dev/null -w '%{http_code}' --interface $i --max-time 6 http://connectivitycheck.gstatic.com/generate_204 2>/dev/null)

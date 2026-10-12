@@ -413,7 +413,13 @@ elif [ "$TT_MODE" = "tun" ] && [ -z "$ATTACH" ]; then
 else
     KEEP=""
     NEW=""
+    CLASSIC=""
     if [ -f "$CFG" ] && grep -q '^\[endpoint\]' "$CFG"; then
+        if [ "$TT_MODE" = "tun" ] && ! grep -q '^[[:space:]]*use_existing[[:space:]]*=[[:space:]]*true' "$CFG"; then
+            CLASSIC=1
+            echo "$(L 'Сейчас клиент работает в классическом режиме (как в исходном TrustTunnel-Keenetic).' 'The client now runs in the classic mode (as in the original TrustTunnel-Keenetic).')"
+            echo "$(L 'Совет: оставьте файл как есть, а на новый режим (статистика в веб-панели, нужен Развилке) переключитесь потом командой tt-stats enable --reboot — она проверяет всё и сама откатывает.' 'Tip: keep the file as it is and switch to the new mode later (dashboard statistics, needed by Razvilka) with tt-stats enable --reboot — it checks everything and rolls back by itself.')"
+        fi
         if ask_yes_no "$(L 'Файл настроек клиента уже есть. Оставить его как есть?' 'A client config already exists. Keep it as it is?')"; then
             KEEP=1
         fi
@@ -464,6 +470,7 @@ else
         if vpn_check; then
             VPN_OK=1
             echo "✅ $(L 'VPN работает: интернет идёт через TrustTunnel.' 'The VPN works: the internet goes through TrustTunnel.')"
+            [ -n "$CLASSIC" ] && [ -n "$NEW" ] && echo "   $(L 'Режим сменился с классического: статистика в веб-панели появится после перезагрузки роутера (tt-stats reboot).' 'The mode changed from classic: dashboard statistics appear after a router reboot (tt-stats reboot).')"
         else
             echo "⛔ $(L 'Интернет через VPN не пошёл за 2 минуты.' 'No internet through the VPN within 2 minutes.')"
             if [ -n "$NEW" ]; then
@@ -498,6 +505,9 @@ rzv_get() {
 if [ "$TT_MODE" != "tun" ]; then
     echo ""
     echo "$(L 'Развилке (своя страна напрямую, бот в Telegram) нужен режим TUN — в режиме SOCKS5 её не предлагаю.' 'Razvilka (home country direct, a Telegram bot) needs TUN mode — not offered in SOCKS5 mode.')"
+elif [ -n "$CLASSIC" ] && [ -n "$KEEP" ]; then
+    echo ""
+    echo "$(L 'Развилке нужен новый режим TUN. Сначала: tt-stats enable --reboot, после перезагрузки запустите установщик ещё раз — он предложит Развилку.' 'Razvilka needs the new TUN mode. First: tt-stats enable --reboot, after the reboot run the installer again — it will offer Razvilka.')"
 elif [ -z "$VPN_OK" ]; then
     echo ""
     echo "$(L 'Развилку (своя страна напрямую, бот в Telegram) можно будет поставить, когда VPN заработает: запустите установщик ещё раз — он предложит.' 'Razvilka (home country direct, a Telegram bot) can be installed once the VPN works: run the installer again — it will offer it.')"
