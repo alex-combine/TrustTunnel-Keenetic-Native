@@ -188,42 +188,51 @@ $f Своя страна ($(cname)) напрямую — главное прав
 screen_hc() {
   if [ -s $HC_URL ]; then
     t=$(kv_get hc_ok 0); [ "$t" = 0 ] && last=$(L 'ещё не было' 'none yet') || last=$(ago $t)
+    fl=''; hc_can_fail && fl=$(L ' А если роутер жив, а VPN нет — тревогу сразу пошлю я, напрямую через провайдера.' ' And if the router is alive but the VPN is not, I send the alarm right away, straight through the ISP.')
+    pz=''; hc_paused && pz="
+
+$(L "🤫 Идёт тест молчания до $(date -d "@$(kv_get hc_pause)" +%H:%M): тревога от сторожа должна прийти минут через 20." "🤫 A silence test is running until $(date -d "@$(kv_get hc_pause)" +%H:%M): the watchdog alarm should come in about 20 minutes.")"
     if en; then scr "🕰 Watchdog is on
 
-Every 5 minutes the router tells the watchdog «I am alive» through the VPN. If the signals stop for 15 minutes (VPN down, no power or internet), the watchdog emails you by itself.
+Every 5 minutes the router tells the watchdog «I am alive» through the VPN. If the signals stop (VPN down, no power or internet), the watchdog sends you an alarm by itself.$fl
 
-Last signal: $last."
+Last signal: $last.$pz"
     else scr "🕰 Сторож включён
 
-Каждые 5 минут роутер через VPN говорит сторожу «я жив». Если сигналы пропадут на 15 минут (упал VPN, нет света или интернета) — сторож сам напишет тебе на почту.
+Каждые 5 минут роутер через VPN говорит сторожу «я жив». Если сигналы пропадут (упал VPN, нет света или интернета) — сторож сам пришлёт тревогу.$fl
 
-Последний сигнал: $last."; fi
-    row "$(L '🧪 Тест тревоги' '🧪 Test alarm')" hct; row "$(L '❌ Выключить сторожа' '❌ Turn watchdog off')" hcoff; row "$(L '« Назад' '« Back')" set
+Последний сигнал: $last.$pz"; fi
+    if hc_paused; then row "$(L '⏹ Прервать тест молчания' '⏹ Stop the silence test')" hcsilx
+    else row "$(L '🤫 Тест молчания (30 мин)' '🤫 Silence test (30 min)')" hcsil; fi
+    hc_can_fail && row "$(L '🧪 Тест тревоги' '🧪 Test alarm')" hct
+    row "$(L '❌ Выключить сторожа' '❌ Turn watchdog off')" hcoff; row "$(L '« Назад' '« Back')" set
   else
     if en; then scr "🕰 Watchdog — a «dead man’s hand»
 
-When the router loses VPN, Telegram at home may go silent too — and there is no one to tell you. The watchdog is an outside service: it waits for «I am alive» from the router every 5 minutes, and if the signals stop, it sends you an email. Email works without VPN.
+When the router loses VPN or power, Telegram at home may go silent too — and there is no one to tell you. The watchdog is an outside service: the router tells it «I am alive» every 5 minutes, and if the signals stop, the watchdog sends you an alarm. It reaches you without VPN.
 
 How to turn it on (5 minutes, free):
-1. Go to healthchecks.io and sign up with your email.
-2. Press «Add Check»: Period — 5 minutes, Grace — 15 minutes.
+1. Go to healthchecks.io and sign up.
+2. Press «Add Check»: Period — 5 minutes, Grace — 15 minutes. Notifications — email or Telegram.
 3. Copy the link like https://hc-ping.com/… and send it to me like this:
 /storozh link
+4. Press «🤫 Silence test» and make sure the alarm really comes.
 
-okchecker.ru and cronitor.io work too — pick the one whose emails reach your inbox.
+tracker.ru and cronitor.io work too — check with the silence test that the alarm reaches you.
 
 The link is like a key: do not show it to anyone. I will delete your message from the chat right after saving it."
     else scr "🕰 Сторож — «мёртвая рука»
 
-Когда у роутера пропадает VPN, Telegram у тебя дома тоже может замолчать — и сказать об этом некому. Сторож — внешний сервис: он ждёт от роутера «я жив» каждые 5 минут, а если сигналы пропали — сам присылает письмо. Почта работает и без VPN.
+Когда у роутера пропадает VPN или свет, Telegram у тебя дома тоже может замолчать — и сказать об этом некому. Сторож — внешний сервис: роутер каждые 5 минут говорит ему «я жив», а если сигналы пропали — сторож сам присылает тревогу. Она доходит и без VPN.
 
 Как включить (5 минут, бесплатно):
-1. Зайди на okchecker.ru и зарегистрируйся по почте (российский сервис — письма доходят и на mail.ru).
-2. Нажми «+ Add Monitor» → «Beat». Schedule: */5 * * * *, Grace period: 10. Уведомления — твоя почта.
-3. Скопируй ссылку из «Beats Endpoint» (вида https://ev.okchecker.ru/p/…) и пришли мне так:
+1. Зайди на tracker.ru и зарегистрируйся (российский сервис).
+2. «Heartbeat» → «Создать»: период — 5 мин, допустимая задержка — 15 мин. Уведомления — почта, MAX или Telegram (MAX и Telegram сначала подключи в «Настройках» сервиса).
+3. Скопируй ссылку для пинга (вида https://hb.tracker.ru/ping/…) и пришли мне так:
 /storozh ссылка
+4. Нажми «🤫 Тест молчания» — убедись, что тревога правда приходит.
 
-Подойдут и healthchecks.io или cronitor.io — если их письма доходят до твоей почты.
+Подойдут и healthchecks.io или cronitor.io — проверь тестом молчания, что тревога до тебя доходит.
 
 Ссылка — как ключ: никому её не показывай. Я удалю твоё сообщение из чата сразу после сохранения."; fi
     row "$(L '« Назад' '« Back')" set
@@ -285,7 +294,7 @@ on_message() {
         if hc_ping; then send "$(L '✅ Сторож включён: первый сигнал дошёл. Дальше роутер сам будет отмечаться каждые 5 минут.' '✅ Watchdog is on: the first signal got through. From now on the router checks in by itself every 5 minutes.')" "$MAIN_KB"
         else send "$(L '🟡 Ссылку сохранил, но первый сигнал не дошёл. Проверь ссылку или нажми 🧪 Тест тревоги в ⚙️ Настройки → 🕰 Сторож.' '🟡 Link saved, but the first signal did not get through. Check the link or press 🧪 Test alarm in ⚙️ Settings → 🕰 Watchdog.')" "$MAIN_KB"; fi
       else send "$(L 'Не похоже на ссылку сторожа 🤔
-Пришли так: /storozh https://ev.okchecker.ru/p/…' 'This does not look like a watchdog link 🤔
+Пришли так: /storozh https://hb.tracker.ru/ping/…' 'This does not look like a watchdog link 🤔
 Send it like this: /storozh https://hc-ping.com/…')" "$MAIN_KB"; fi ;;
     *) d=$(clean_domain "$TEXT")
        if [ -n "$d" ]; then site_card "$d"
@@ -356,7 +365,12 @@ Devices and your sites will not change.')"; row "$(L '↩️ Вернуть ка
     hct) if hc_ping /fail; then toast "$CQ" "$(L 'Отправил' 'Sent')"; screen_hc; scr_edit $MID "$(L '🧪 Отправил сторожу «тревога». Сейчас придёт письмо о тревоге, а через 5 минут — «снова в порядке».' '🧪 Sent «alarm» to the watchdog. An alarm email will come now, and in 5 minutes — «back to normal».')
 
 "; else toast "$CQ" "$(L 'Сторож не ответил' 'Watchdog did not answer')"; fi ;;
-    hcoff) rm -f $HC_URL; kv_del hc_ok; log 'сторож выключен'; toast "$CQ" "$(L 'Сторож выключен' 'Watchdog off')"
+    hcsil) kv_set hc_pause $(( $(now) + 1800 )); log 'сторож: тест молчания на 30 мин'; toast "$CQ" "$(L 'Тест начался' 'Test started')"; screen_hc
+      scr_edit $MID "$(L '🤫 Тест молчания начался: 30 минут роутер не подаёт сторожу сигналов. Минут через 20 сторож должен прислать тревогу. Потом сигналы вернутся сами, и я спрошу, пришла ли она.' '🤫 The silence test has started: for 30 minutes the router sends no signals to the watchdog. In about 20 minutes the watchdog should send you an alarm. Then the signals come back by themselves and I will ask whether it came.')
+
+" ;;
+    hcsilx) kv_del hc_pause; hc_ping; log 'сторож: тест молчания прерван'; toast "$CQ" "$(L 'Тест прерван' 'Test stopped')"; screen_hc; scr_edit $MID ;;
+    hcoff) rm -f $HC_URL; kv_del hc_ok; kv_del hc_pause; log 'сторож выключен'; toast "$CQ" "$(L 'Сторож выключен' 'Watchdog off')"
       screen_settings; scr_edit $MID "$(L '❌ Сторож выключен. Не забудь удалить или поставить на паузу проверку у сервиса-сторожа, иначе он пришлёт тревогу.' '❌ Watchdog is off. Remember to delete or pause the check at your watchdog service, otherwise it will send an alarm.')
 
 " ;;

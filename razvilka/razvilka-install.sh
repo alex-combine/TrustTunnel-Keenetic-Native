@@ -12,7 +12,7 @@
 # Rules: 1) look first; 2) do not touch what is not ours; 3) before changes — a settings backup and a list of what was done
 # (manifest) for rollback; 4) after install check the VPN — no answer → roll everything back; 5) show the plan, ask "yes".
 export PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
-VERSION=0.7
+VERSION=0.8
 HERE=$(cd "$(dirname "$0")" && pwd); FILES=$HERE/razvilka-files
 TS=$(date +%Y%m%d_%H%M%S 2>/dev/null)
 DEMO=0; YES=0; LNG=""; MODE=install; R=""
@@ -55,6 +55,7 @@ if [ $MODE = uninstall ]; then
   echo "  $(L 'Верну всё по списку сделанного:' 'I will undo everything from the manifest:') $R$MAN"
   ask "$(L 'Удаляем? (да/нет)' 'Remove? (yes/no)')" "$([ $YES = 1 ] && yes_word || L нет no)"; is_yes "$ANS" || { echo "  $(L 'Хорошо, ничего не меняю.' 'OK, nothing changed.')"; exit 0; }
   [ -x "$R/opt/etc/init.d/S99razvilka" ] && sys "/opt/etc/init.d/S99razvilka stop"
+  [ -x "$R$APP/rzv-act.sh" ] && sys "$APP/rzv-act.sh fuse_off >/dev/null 2>&1"   # take the DNS fuse off if it is on
   # walk the list from the end
   awk '{a[NR]=$0} END{for(i=NR;i>=1;i--) print a[i]}' "$R$MAN" | while read -r kind a b c; do case "$kind" in
     file)  case "$a" in "$ETC"/*) continue;; esac                            # settings — decided by the question below
@@ -307,6 +308,11 @@ if [ ! -f "$R/opt/etc/ndm/netfilter.d/56-direct-routes.sh" ]; then
   printf '#!/bin/sh\n# Развилка: после пересборки nat прошивкой — вернуть DNS-правила групп\n[ "$type" = iptables ] && [ "$table" = nat ] && %s/direct-routes.sh nat >/dev/null 2>&1\nexit 0\n' "$CORE" > "$R/opt/etc/ndm/netfilter.d/56-razvilka-routes.sh"
   chmod 755 "$R/opt/etc/ndm/netfilter.d/56-razvilka-routes.sh"
 fi
+if [ ! -f "$R/opt/etc/ndm/netfilter.d/57-razvilka-fuse.sh" ]; then
+  mkdir -p "$R/opt/etc/ndm/netfilter.d"; note "file /opt/etc/ndm/netfilter.d/57-razvilka-fuse.sh"
+  printf '#!/bin/sh\n# Razvilka: after the firmware rebuilds the filter table, put the DNS fuse back (only if it is on)\n[ "$table" = filter ] && %s/rzv-act.sh fuse_apply >/dev/null 2>&1\nexit 0\n' "$APP" > "$R/opt/etc/ndm/netfilter.d/57-razvilka-fuse.sh"
+  chmod 755 "$R/opt/etc/ndm/netfilter.d/57-razvilka-fuse.sh"
+fi
 cronline() {  # cronline tag "line" [marker of an existing line]
   grep -q "# razvilka:$1\$" "$R/opt/etc/crontab" 2>/dev/null && return 0
   [ -n "$3" ] && grep -qF "$3" "$R/opt/etc/crontab" 2>/dev/null && return 0
@@ -316,6 +322,7 @@ touch "$R/opt/etc/crontab"
 [ -f "$R/opt/etc/cron.1min/direct-routes" ] || cronline routes "* * * * * root $CORE/direct-routes.sh tick >/dev/null 2>&1" "direct-routes.sh tick"
 cronline geo     "23 4 * * * root $CORE/geo-build.sh apply"         "geo-build.sh apply"
 cronline checks  "*/5 * * * * root $APP/rzv-act.sh checks"          "rzv-act.sh checks"
+cronline guard   "* * * * * root $APP/rzv-act.sh guard"             "rzv-act.sh guard"
 cronline watch   "*/10 * * * * root $APP/rzv-act.sh watch"          "rzv-act.sh watch"
 cronline refresh "45 4 * * * root $APP/rzv-act.sh refresh"          "rzv-act.sh refresh"
 okm "$(L 'Расписание' 'Cron'): OK"

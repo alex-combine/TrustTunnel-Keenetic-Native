@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.3.3 — Razvilka: self-healing and a watchdog that really alarms
+
+- **Self-healing** (`rzv-act.sh guard`, every minute): after 3 minutes without data through the VPN,
+  devices with a VPN policy get an instant «no DNS» (the DNS fuse: REJECT on port 53, IPv4 and IPv6 —
+  nothing leaks to the ISP, no retry storm, no conntrack pile-up), and the VPN connection is restarted
+  (TrustTunnel — `S99trusttunnel reload`, WireGuard — `interface WireguardN down/up`, others — `VPN_NDM=`
+  in `net.conf`), at most once in 30 minutes. 6 minutes — optional own script `heal2.sh`. The fuse comes off
+  after 2 good checks or by itself in 30 minutes; a netfilter hook puts it back after the firmware rebuilds
+  the filter table. `GUARD=0` / `FUSE=0` / `HEAL=0` in `net.conf` turn it off.
+- **Watchdog:** when the router is alive but the VPN is not, services that take explicit alarms
+  (healthchecks, Cronitor, OKchecker) get one right away, straight through the ISP. New «🤫 Silence test»
+  button: 30 minutes without signals to check that the alarm really comes. The bot instructions now
+  recommend tracker.ru (RU) and healthchecks.io (EN): a test on 12.10.2026 showed that OKchecker does not
+  turn 3 hours of silence into an alarm. The morning summary says every day when the watchdog last heard
+  from the router.
+- Installer 0.8: the `guard` cron line and the `57-razvilka-fuse.sh` hook; removal takes the fuse off.
+
 ## v2.3.2 — the router does not choke when the VPN drops at night
 
 A real night on a 128 MB router: the VPN server became unreachable during the nightly Razvilka map build,
