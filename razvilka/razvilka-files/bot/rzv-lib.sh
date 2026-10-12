@@ -201,6 +201,12 @@ ptr_site() {
   case "$p" in ''|*[0-9]-[0-9]*|*static*|*dynamic*|*pool*|*dsl*|*client*|*broadband*|*customer*|*ip-*|*in-addr*) return 0;; esac
   echo "$p" | awk -F. 'NF>=2{print $(NF-1)"."$NF}'
 }
+# Company name by its number: from your lists (allowed / removed), else from the address cache
+asn_name() {   # asn
+  n=$(sed -n "s/^[[:space:]]*\(AS\)\{0,1\}$1[[:space:]]*#[[:space:]]*//p" $ALLOW $DENY 2>/dev/null | head -1 | sed 's/[[:space:]]*—.*$//')
+  [ -n "$n" ] || n=$(awk -v a="$1" '$2==a{$1=$2=$3=""; sub(/^ +/,""); print; exit}' $CACHE_IP 2>/dev/null)
+  org_name "$n" "$1"
+}
 kn() { v=$(kv_get "$1" 0); case "$v" in ''|*[!0-9]*) echo 0;; *) echo "$v";; esac; }   # numeric kv value, 0 if broken
 heal_known() {   # does the self-healing know how to restart this VPN connection?
   [ -n "$VPN_NDM" ] && return 0

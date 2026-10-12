@@ -34,7 +34,7 @@ company_add() {   # asn [holder] → 0 added, 1 not allowed (cloud/hosting)
     [ -n "$mine" ] && n2=$(echo "$mine" | head -1 | sed -n 's/^[^#]*#[[:space:]]*//p' | sed 's/[[:space:]]*—[[:space:]]*\(убрано\|отклонено\).*$//') && [ -n "$n2" ] && note=$n2
     echo "$1   # $note — добавлено кнопкой $(today)" >> $ALLOW
   fi
-  log "добавить AS$1"; refresh "$(L "по кнопке AS$1" "button AS$1")" $1; return 0
+  log "добавить AS$1"; refresh "$(L "ты добавил компанию $(asn_name $1)" "you added the company $(asn_name $1)")" $1; return 0
 }
 
 # ---------- company networks refresh (RIPE through the tunnel) ----------
@@ -46,7 +46,7 @@ ripe() {   # asn → IPv4 networks (not wider than /10, not private)
 }
 refresh() {   # refresh "reason" [ASN…] — without a list: all companies
   reason=$1; shift; only=" $* "; d=$(today); cut=$(date -d @$(( $(now) - STALE_DAYS*86400 )) +%F)
-  touch $NETSDB
+  touch $NETSDB; cp $NETSDB $W/db.before
   for a in $(sed -n 's/^[[:space:]]*\(AS\)\{0,1\}\([0-9][0-9]*\).*/\2/p' $ALLOW | sort -un); do
     asn_in $DENY $a && continue; [ "$only" != '  ' ] && ! echo "$only" | grep -q " $a " && continue
     if ! ripe $a > $W/got || [ ! -s $W/got ]; then log "AS$a: RIPE не ответил или пусто — оставляю прошлые сети"; continue; fi
@@ -83,9 +83,25 @@ push() {   # file $W/new → router (.prev copy) → load → VPN check → roll
     send "$(L '⚠️ Развилка: после обновления сетей VPN не ответил — вернул прошлый список. Нужен осмотр.' '⚠️ Razvilka: VPN did not answer after the network update — I put the previous list back. Needs a look.')"; return 1; fi; fi
   log "push ($1): +$2 −$3, всего $4"
   if [ -s $W/old ]; then
-    m="$(L "🛣 Прямые дороги обновлены ($1): +$2 −$3, всего сетей $4." "🛣 Direct routes updated ($1): +$2 −$3, $4 networks in total.")"
-    m="$m$(awk 'NR==FNR{o[$1]=1; next} !($1 in o){n++; if(n<=15) printf "\n+ %s", $1} END{if(n>15) printf "\n…"}' $W/old $W/new)"
-    m="$m$(awk 'NR==FNR{o[$1]=1; next} !($1 in o){n++; if(n<=10) printf "\n− %s", $1} END{if(n>10) printf "\n…"}' $W/new $W/old)"
+    # networks by company: «➕ RU-CENTER: 91.189.112.0/23» (company names, not registry numbers)
+    awk 'NR==FNR{o[$1]=1; next} !($1 in o)' $W/old $W/new > $W/plus; awk 'NR==FNR{o[$1]=1; next} !($1 in o)' $W/new $W/old > $W/minus
+    cat $NETSDB $W/db.before 2>/dev/null > $W/dbmap                     # «network company date», now and before
+    by_co() {   # file sign → one line per company: «➕ RU-CENTER: 91.189.112.0/23»
+      awk 'NR==FNR{if(!($1 in a)) a[$1]=$2; next} {print (($1 in a) ? a[$1] : 0), $1}' $W/dbmap "$1" | sort -n |
+        awk '{if($1!=p){if(p!="") print p, c, l; p=$1; c=0; l=""} c++; if(c<=3) l=l (l==""?"":", ") $2} END{if(p!="") print p, c, l}' |
+        while read -r as c l; do [ $c -gt 3 ] && l="$l $(L "и ещё $((c-3))" "and $((c-3)) more")"
+          if [ "$as" = 0 ]; then nm=$(L 'другие сети' 'other networks'); else nm=$(asn_name $as); fi
+          printf '\n%s %s: %s' "$2" "$nm" "$l"; done; }
+    m="$(L "🛣 Прямые дороги обновлены: $1." "🛣 Direct routes updated: $1.")"
+    [ -s $W/plus ] && m="$m
+
+$(L 'Теперь напрямую:' 'Now direct:')$(by_co $W/plus ➕)"
+    [ -s $W/minus ] && m="$m
+
+$(L 'Теперь через VPN:' 'Now via VPN:')$(by_co $W/minus ➖)"
+    m="$m
+
+$(L "Всего прямых сетей у компаний из списка: $4." "Direct networks of the listed companies: $4 in total.")"
     send "$m"; fi
 }
 
@@ -134,7 +150,7 @@ This company is from your home country, but its addresses are not in the country
 Recognise it (a bank, a shop, a service)? Let it go direct. Don't? «No, thanks» — nothing breaks.")" "$(kb_json $SKB)"
     fi
   done < $W/flows
-  [ -n "$stale" ] && { log "watch: адреса компаний из списка шли через VPN:$stale"; refresh "$(L 'найдено в соединениях' 'found in connections')" $stale; }   # the lock is already taken in "watch)"
+  [ -n "$stale" ] && { log "watch: адреса компаний из списка шли через VPN:$stale"; refresh "$(L 'у компаний из твоего списка появились новые адреса' 'companies from your list got new addresses')" $stale; }   # the lock is already taken in "watch)"
   return 0
 }
 
@@ -281,7 +297,7 @@ case "$A" in
   fuse_apply) [ "$GUARD" = 1 ] && [ "$FUSE" = 1 ] && [ "$(kn fuse_on)" -gt 0 ] && fuse_rules_on; exit 0 ;;
   fuse_off) fuse_off; exit 0 ;;
   watch)  lock 60 || exit 0; watch; unlock ;;
-  refresh) QUEUE_ON_FAIL=1; lock 600 || exit 0; refresh "$(L 'сверка' 'check')" "$@"; unlock ;;
+  refresh) QUEUE_ON_FAIL=1; lock 600 || exit 0; refresh "$(L 'ночная сверка сетей компаний' 'nightly check of company networks')" "$@"; unlock ;;
   card_as|card_ac|card_vpn)
     MID=$1; set -- $(kv_get card); d=$1; asn=$2; shift 2 2>/dev/null; holder="$*"
     [ -z "$d" ] && exit 0; clean_domain "$d" >/dev/null || exit 0; is_num "$asn" || asn=0
@@ -314,7 +330,7 @@ It works for devices that ask the router for addresses.")"; else res="$(L '😕 
 }"; screen_list; scr_edit $MID "$ok" ;;
   company_del) ca=$1;   # not «a»: refresh walks the company list in «a»
     MID=$2; nm=$(companies | awk -v a="$ca" '$1==a{$1=""; sub(/^ /,""); print; exit}'); lock 600 || busy
-    [ -n "$nm" ] && { allow_del $ca "$nm"; refresh "$(L "убрано кнопкой AS$ca" "removed by button AS$ca")"; }; unlock
+    [ -n "$nm" ] && { allow_del $ca "$nm"; refresh "$(L "ты убрал компанию $(org_name "$nm" $ca)" "you removed the company $(org_name "$nm" $ca)")"; }; unlock
     ok="${nm:+$(L "✅ $(org_name "$nm" $ca) теперь через VPN." "✅ $(org_name "$nm" $ca) now goes via VPN.")
 
 }"; screen_list; scr_edit $MID "$ok" ;;
@@ -322,7 +338,7 @@ It works for devices that ask the router for addresses.")"; else res="$(L '😕 
     if [ -n "$l" ]; then
       for a in $(echo "$l" | cut -d'|' -f3); do allow_del $a "$nm"; done
       for d in $(echo "$l" | cut -d'|' -f4); do site_del $d; done
-      [ -n "$(echo "$l" | cut -d'|' -f3)" ] && refresh "$(L "убрано кнопкой: $nm" "removed by button: $nm")"
+      [ -n "$(echo "$l" | cut -d'|' -f3)" ] && refresh "$(L "ты убрал «$nm»" "you removed «$nm»")"
     fi; unlock; ok="${nm:+$(L "✅ $nm теперь через VPN." "✅ $nm now goes via VPN.")
 
 }"; screen_list; scr_edit $MID "$ok" ;;
@@ -361,8 +377,8 @@ It works for devices that ask the router for addresses.")"; else res="$(L '😕 
 "; fi ;;
   hint_skip) a=$1; MID=$2; echo "$a   # отклонено кнопкой $(today)" >> $DENY
     nm=$(org_name "$(awk -v x="$a" '$2==x{$1=$2=$3=""; sub(/^ +/,""); print; exit}' $CACHE_IP 2>/dev/null)" $a)
-    edit $MID "$(L "Хорошо, $nm (AS$a) оставляю через VPN и больше про неё не спрашиваю." "OK, $nm (AS$a) stays via VPN and I will not ask about it again.")" ;;
+    edit $MID "$(L "Хорошо, $nm оставляю через VPN и больше про неё не спрашиваю." "OK, $nm stays via VPN and I will not ask about it again.")" ;;
   hint_add) ha=$1; MID=$2; lock 600 || busy   # not «a»: refresh walks the company list in «a»
     nm=$(org_name "$(awk -v x="$ha" '$2==x{$1=$2=$3=""; sub(/^ +/,""); print; exit}' $CACHE_IP 2>/dev/null)" $ha)
-    if company_add $ha; then res="$(L "✅ $nm (AS$ha) теперь напрямую." "✅ $nm (AS$ha) now goes direct.")"; else res="$(L "$nm (AS$ha) — облако или хостинг, целиком не добавляю." "$nm (AS$ha) is a cloud or hosting, I do not add it as a whole.")"; fi; unlock; edit $MID "$res" ;;
+    if company_add $ha; then res="$(L "✅ $nm теперь напрямую." "✅ $nm now goes direct.")"; else res="$(L "$nm — облако или хостинг, целиком не добавляю." "$nm is a cloud or hosting, I do not add it as a whole.")"; fi; unlock; edit $MID "$res" ;;
 esac
