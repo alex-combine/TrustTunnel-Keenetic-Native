@@ -66,7 +66,7 @@ refresh() {   # refresh "reason" [ASN…] — without a list: all companies
         if(!k) print c[i]}}' $GEO_FILE $W/n 2>/dev/null | sort > $W/new
   [ -f $GEO_FILE ] || sort $W/n > $W/new
   touch $R_FILE; sort $R_FILE > $W/old
-  tot=$(grep -c . $W/new); add=$(awk 'NR==FNR{o[$1]=1; next} !($1 in o)' $W/old $W/new | grep -c .); rem=$(awk 'NR==FNR{o[$1]=1; next} !($1 in o)' $W/new $W/old | grep -c .)
+  tot=$(grep -c . $W/new); add=$(awk 'FILENAME==ARGV[1]{o[$1]=1; next} !($1 in o)' $W/old $W/new | grep -c .); rem=$(awk 'FILENAME==ARGV[1]{o[$1]=1; next} !($1 in o)' $W/new $W/old | grep -c .)
   if [ $tot -gt $MAX_TOTAL ] || { [ -s $W/old ] && [ $add -gt $MAX_ADD ]; }; then
     log "СТОП: слишком большое изменение (+$add, всего $tot) — не применяю"
     send "$(L "⚠️ Развилка: RIPE дал подозрительно много сетей (+$add, всего $tot). Не применял. Проверь список компаний." "⚠️ Razvilka: RIPE returned suspiciously many networks (+$add, $tot in total). Not applied. Check the company list.")"; return 1; fi
@@ -84,11 +84,11 @@ push() {   # file $W/new → router (.prev copy) → load → VPN check → roll
   log "push ($1): +$2 −$3, всего $4"
   if [ -s $W/old ]; then
     # networks by company: «➕ RU-CENTER: 91.189.112.0/23» (company names, not registry numbers)
-    awk 'NR==FNR{o[$1]=1; next} !($1 in o)' $W/old $W/new > $W/plus; awk 'NR==FNR{o[$1]=1; next} !($1 in o)' $W/new $W/old > $W/minus
-    cat $NETSDB $W/db.before 2>/dev/null > $W/dbmap                     # «network company date», now and before
+    awk 'FILENAME==ARGV[1]{o[$1]=1; next} !($1 in o)' $W/old $W/new > $W/plus; awk 'FILENAME==ARGV[1]{o[$1]=1; next} !($1 in o)' $W/new $W/old > $W/minus
+    cat $NETSDB $W/db.before 2>/dev/null > $W/dbmap; [ -s $W/dbmap ] || echo "- 0 -" > $W/dbmap                     # «network company date», now and before
     by_co() {   # file sign → one line per company: «➕ RU-CENTER: 91.189.112.0/23»
-      awk 'NR==FNR{if(!($1 in a)) a[$1]=$2; next} {print (($1 in a) ? a[$1] : 0), $1}' $W/dbmap "$1" | sort -n |
-        awk '{if($1!=p){if(p!="") print p, c, l; p=$1; c=0; l=""} c++; if(c<=3) l=l (l==""?"":", ") $2} END{if(p!="") print p, c, l}' |
+      awk 'FILENAME==ARGV[1]{if(!($1 in a)) a[$1]=$2; next} {print (($1 in a) ? a[$1] : 0), $1}' $W/dbmap "$1" | sort -n |
+        awk 'BEGIN{p="-"} {if($1""!=p){if(p!="-") print p, c, l; p=$1""; c=0; l=""} c++; if(c<=3) l=l (l==""?"":", ") $2} END{if(p!="-") print p, c, l}' |
         while read -r as c l; do [ $c -gt 3 ] && l="$l $(L "и ещё $((c-3))" "and $((c-3)) more")"
           if [ "$as" = 0 ]; then nm=$(L 'другие сети' 'other networks'); else nm=$(asn_name $as); fi
           printf '\n%s %s: %s' "$2" "$nm" "$l"; done; }
@@ -299,8 +299,9 @@ case "$A" in
   watch)  lock 60 || exit 0; watch; unlock ;;
   refresh) QUEUE_ON_FAIL=1; lock 600 || exit 0; refresh "$(L 'ночная сверка сетей компаний' 'nightly check of company networks')" "$@"; unlock ;;
   card_as|card_ac|card_vpn)
-    MID=$1; set -- $(kv_get card); d=$1; asn=$2; shift 2 2>/dev/null; holder="$*"
-    [ -z "$d" ] && exit 0; clean_domain "$d" >/dev/null || exit 0; is_num "$asn" || asn=0
+    MID=$1; if [ -n "$2" ]; then d=$2; asn=0; holder=''; else set -- $(kv_get card); d=$1; asn=$2; shift 2 2>/dev/null; holder="$*"; fi
+    old=$(L 'Устарело — пришли адрес сайта ещё раз.' 'Outdated — send the site address again.')
+    [ -z "$d" ] && { edit $MID "$old"; exit 0; }; clean_domain "$d" >/dev/null || { edit $MID "$old"; exit 0; }; is_num "$asn" || asn=0
     : > $SKB
     case "$A" in
       card_as) lock 300 || busy
@@ -363,9 +364,9 @@ It works for devices that ask the router for addresses.")"; else res="$(L '😕 
       scr_edit $MID "$(L '✅ Включаю «Своя страна напрямую». Роутер соберёт список сам — около двух минут.' '✅ Turning on «Home country direct». The router will build the list itself — about two minutes.')
 
 "
-      lock 300 && { $GEO_SH on >/dev/null 2>&1; unlock; }; fi ;;
+      lock 300 || busy; $GEO_SH on >/dev/null 2>&1; unlock; fi ;;
   lite) MID=$1; edit $MID "$(L '🗺 Включаю лёгкую карту — роутер соберёт её за пару минут. Проверить: 📊 Статус.' '🗺 Turning on the light map — the router will build it in a couple of minutes. To check: 📊 Status.')"; log 'включена лёгкая карта'
-    lock 300 || exit 0; grep -q '^LITE=' $GEO_CONF && sed -i 's/^LITE=.*/LITE=1/' $GEO_CONF || echo LITE=1 >> $GEO_CONF
+    lock 300 || busy; grep -q '^LITE=' $GEO_CONF && sed -i 's/^LITE=.*/LITE=1/' $GEO_CONF || echo LITE=1 >> $GEO_CONF
     $GEO_SH apply >/dev/null 2>&1; unlock ;;
   rollback) MID=$1; lock 300 || busy; n=0
     [ -f $GEO_FILE.prev ] && cp $GEO_FILE.prev $GEO_FILE && n=1; [ -f $R_FILE.prev ] && cp $R_FILE.prev $R_FILE && n=1
@@ -375,10 +376,9 @@ It works for devices that ask the router for addresses.")"; else res="$(L '😕 
 "; else scr_edit $MID "$(L 'Прошлой версии нет — возвращать нечего.' 'There is no previous version — nothing to undo.')
 
 "; fi ;;
-  hint_skip) a=$1; MID=$2; echo "$a   # отклонено кнопкой $(today)" >> $DENY
-    nm=$(org_name "$(awk -v x="$a" '$2==x{$1=$2=$3=""; sub(/^ +/,""); print; exit}' $CACHE_IP 2>/dev/null)" $a)
+  hint_skip) a=$1; MID=$2; nm=$(asn_name $a); echo "$a   # $nm — отклонено кнопкой $(today)" >> $DENY
     edit $MID "$(L "Хорошо, $nm оставляю через VPN и больше про неё не спрашиваю." "OK, $nm stays via VPN and I will not ask about it again.")" ;;
   hint_add) ha=$1; MID=$2; lock 600 || busy   # not «a»: refresh walks the company list in «a»
-    nm=$(org_name "$(awk -v x="$ha" '$2==x{$1=$2=$3=""; sub(/^ +/,""); print; exit}' $CACHE_IP 2>/dev/null)" $ha)
+    nm=$(asn_name $ha)
     if company_add $ha; then res="$(L "✅ $nm теперь напрямую." "✅ $nm now goes direct.")"; else res="$(L "$nm — облако или хостинг, целиком не добавляю." "$nm is a cloud or hosting, I do not add it as a whole.")"; fi; unlock; edit $MID "$res" ;;
 esac

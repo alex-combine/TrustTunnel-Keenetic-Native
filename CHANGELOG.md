@@ -23,7 +23,7 @@
   so hints could suggest companies that already go direct and the site card missed company exceptions.
 - **Plain names everywhere:** «Direct routes updated» says why in words («you added the company RU-CENTER»,
   «nightly check of company networks») and lists networks by company name; no registry numbers (AS…) in the
-  bot's messages.
+  bot's messages (a number only when the name is unknown).
 - **Long buttons answer at once:** «Send direct / via VPN», «Remove exception», device switch, home country
   on/off and undo immediately replace the message with «⏳ what I am doing… no need to press again» and take
   the buttons away; while one long job runs, other long buttons answer «⏳ Still busy» and start nothing.

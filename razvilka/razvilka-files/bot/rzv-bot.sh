@@ -266,6 +266,7 @@ Send the address — I will tell where it goes now, and you can change it.' '{"f
   else send '🔎 Какой сайт проверить?
 
 Пришли адрес — скажу, куда он идёт сейчас, и можно будет поменять.' '{"force_reply":true,"input_field_placeholder":"например, rustore.ru"}'; fi; }
+cbd() { [ ${#2} -le 58 ] && echo "$1:$2" || echo "$1"; }   # button data with the site (Telegram allows 64 bytes)
 site_card() {   # domain → card; card data is kept in kv card
   d=$1
   ips=$(dig +short +time=3 +tries=1 A "$d" @77.88.8.8 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -4)
@@ -290,10 +291,10 @@ site_card() {   # domain → card; card data is kept in kv card
     row "$(L '↩️ Убрать исключение' '↩️ Remove exception')" "sd:$(grep -nxF "$d" $ETC/sites | cut -d: -f1)"
   elif [ $dgeo = 1 ] || [ $dco = 1 ] || [ $ddom = 1 ]; then
     if [ $dgeo = 1 ]; then w=$(L 'адрес в своей стране' 'address in your home country'); elif [ $dco = 1 ]; then w=$(L "исключение «$org»" "exception «$org»"); else w=$(L 'сайт в старом списке роутера' 'site in the router’s old list'); fi
-    printf '\n%s' "$(L "✅ Сейчас идёт напрямую: $w." "✅ Now goes direct: $w.")" >> $SCR; row "$(L '🔒 Пустить через VPN' '🔒 Send via VPN')" vpn
+    printf '\n%s' "$(L "✅ Сейчас идёт напрямую: $w." "✅ Now goes direct: $w.")" >> $SCR; row "$(L '🔒 Пустить через VPN' '🔒 Send via VPN')" "$(cbd vpn $d)"
   else
     if [ $den = 1 ] && [ "$cc" = "$CC" ]; then w=$(L 'сайт на хостинге, где живут и чужие сайты' 'site on a hosting shared with other sites'); elif [ "$cc" != "$CC" ]; then w=$(L 'адрес за рубежом' 'address abroad'); else w=$(L 'адреса нет в карте страны' 'address is not in the country map'); fi
-    printf '\n%s' "$(L "🔒 Сейчас идёт через VPN: $w." "🔒 Now goes via VPN: $w.")" >> $SCR; row "$(L '🌐 Пустить напрямую' '🌐 Send direct')" as
+    printf '\n%s' "$(L "🔒 Сейчас идёт через VPN: $w." "🔒 Now goes via VPN: $w.")" >> $SCR; row "$(L '🌐 Пустить напрямую' '🌐 Send direct')" "$(cbd as $d)"
   fi
   row "$(L '👌 Понятно' '👌 Got it')" x; scr_send
 }
@@ -345,7 +346,7 @@ If something breaks, I will write to you myself.' "$MAIN_KB"
 act() { $APP/rzv-act.sh "$@"; }   # heavy actions run as a separate process (with the lock)
 JOB=$TMP/job                       # what the router is busy with now (one long job at a time)
 slow() {   # slow "what I am doing" action args… — answer at once, take the buttons away, then work in the background
-  if [ -f $JOB ] && [ -z "$(find $JOB -mmin +15 2>/dev/null)" ]; then
+  if [ -f $JOB ] && [ $(( $(now) - $(date -r $JOB +%s 2>/dev/null || echo 0) )) -lt 2400 ]; then   # stale after 40 min
     toast "$CQ" "$(L "⏳ Ещё выполняю: $(cat $JOB). Подожди немного." "⏳ Still busy: $(cat $JOB). Please wait a little.")"; return 0; fi
   printf '%s' "$1" > $JOB; toast "$CQ"
   edit $MID "⏳ $1
@@ -368,6 +369,9 @@ on_callback() {
     cd:*) is_num "$s" && slow "$(L 'Убираю компанию — скачиваю сети заново…' 'Removing the company — refreshing the networks…')" company_del $s $MID ;;
     sd:*) is_num "$s" && slow "$(L 'Убираю исключение…' 'Removing the exception…')" site_del $s $MID ;;
     vd:*) is_num "$s" && slow "$(L 'Возвращаю сайт к общему правилу — пересобираю карту страны…' 'Putting the site back to the general rule — rebuilding the country map…')" vsite_del $s $MID ;;
+    as:*|vpn:*) d=$(clean_domain "$s") || { toast "$CQ"; return; }
+      if [ "${DATA%%:*}" = as ]; then slow "$(L "Пускаю $d напрямую…" "Sending $d direct…")" card_as $MID $d
+      else slow "$(L "Пускаю $d через VPN — пересобираю карту страны…" "Sending $d via VPN — rebuilding the country map…")" card_vpn $MID $d; fi ;;
     as|ac|vpn)
       c=$(kv_get card); [ -z "$c" ] && { toast "$CQ" "$(L 'Устарело — пришли адрес ещё раз' 'Outdated — send the address again')"; return; }
       case $DATA in
@@ -445,7 +449,7 @@ setup_once() {
 [ "$1" = run ] || return 0
 [ -n "$TELEGRAM_BOT_TOKEN" ] && [ "$ADMIN" != 0 ] || { log 'нет tg.env — бот не запущен'; exit 1; }
 log "бот запущен (pid $$, язык $BOTLANG)"; setup_once
-for x in $TMP/w.* $TMP/k.*; do case "$x" in "$W"|*"*") ;; *) rm -rf "$x";; esac; done   # leftovers of previous runs (k.* holds the URL with the token)
+for x in $TMP/w.* $TMP/k.*; do case "$x" in "$W"|*"*") ;; *) kill -0 "${x##*.}" 2>/dev/null || rm -rf "$x";; esac; done   # leftovers of previous runs (k.* holds the URL with the token)
 U=$TMP/upd.json; Q=$TMP/q.json
 while :; do
   if [ "$(mem_kb)" -lt 8000 ]; then sleep 30; continue; fi     # the router is very short on memory — wait, do not make it worse

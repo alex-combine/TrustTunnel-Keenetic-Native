@@ -57,7 +57,7 @@ kv_del() { rm -f "$KV/$1"; }
 # ---------- lock: one heavy job at a time ----------
 lock() {   # lock [seconds to wait]
   n=0; while ! mkdir $TMP/lock 2>/dev/null; do
-    [ -n "$(find $TMP/lock -maxdepth 0 -mmin +15 2>/dev/null)" ] && { rmdir $TMP/lock; continue; }
+    [ $(( $(now) - $(date -r $TMP/lock +%s 2>/dev/null || now) )) -gt 1800 ] && { rmdir $TMP/lock; continue; }
     n=$((n+5)); [ $n -ge ${1:-300} ] && return 1; sleep 5
   done; return 0
 }
@@ -192,12 +192,13 @@ policy_macs() { iptables -t mangle -S _NDM_HOTSPOT_PREROUTING_MANGL 2>/dev/null 
     if (m != "" && x != "" && index(marks, " " x " ")) print m}' | sort -u; }
 # A company name people can read: «HCRU-AS - JSC _RU-CENTER_, RU» → «RU-CENTER»
 org_name() {   # holder [asn]
-  o=$(printf '%s' "$1" | sed -E 's/^[A-Za-z0-9_.-]+ - //; s/,[^,]*$//; s/[_"«»]//g; s/^(JSC|PJSC|OJSC|CJSC|LLC|Llc|OOO|AO|ZAO|PAO|LTD|Ltd)\.? +//; s/ +(JSC|PJSC|LLC|Llc|LTD|Ltd|GmbH|Inc|AG|BV|B\.V)\.?$//; s/^ +| +$//g')
+  [ "$1" = - ] && set -- '' "$2"
+  o=$(printf '%s' "$1" | sed -E 's/^[A-Za-z0-9_.-]+ - //; s/,[^,]*$//; s/[_"]//g; s/«//g; s/»//g; s/^(JSC|PJSC|OJSC|CJSC|LLC|Llc|OOO|AO|ZAO|PAO|LTD|Ltd|ООО|АО|ПАО|ЗАО|ОАО|НАО|АНО)\.? +//; s/ +(JSC|PJSC|LLC|Llc|LTD|Ltd|GmbH|Inc|AG|BV|B\.V)\.?$//; s/^ +| +$//g')
   [ -n "$o" ] && printf '%s' "$o" || printf 'AS%s' "$2"
 }
 # A site name from the address itself (reverse DNS), only when it looks like a name, not like an ISP pool
 ptr_site() {
-  p=$(dig +short +time=2 +tries=1 -x "$1" @77.88.8.8 2>/dev/null | head -1 | sed 's/\.$//')
+  p=$(dig +short +time=2 +tries=1 -x "$1" @77.88.8.8 2>/dev/null | grep -v '^;' | grep -iE '^[a-z0-9.-]+\.[a-z]{2,}\.?$' | tail -1 | sed 's/\.$//')
   case "$p" in ''|*[0-9]-[0-9]*|*static*|*dynamic*|*pool*|*dsl*|*client*|*broadband*|*customer*|*ip-*|*in-addr*) return 0;; esac
   echo "$p" | awk -F. 'NF>=2{print $(NF-1)"."$NF}'
 }
@@ -205,6 +206,7 @@ ptr_site() {
 asn_name() {   # asn
   n=$(sed -n "s/^[[:space:]]*\(AS\)\{0,1\}$1[[:space:]]*#[[:space:]]*//p" $ALLOW $DENY 2>/dev/null | head -1 | sed 's/[[:space:]]*—.*$//')
   [ -n "$n" ] || n=$(awk -v a="$1" '$2==a{$1=$2=$3=""; sub(/^ +/,""); print; exit}' $CACHE_IP 2>/dev/null)
+  [ -n "$n" ] || n=$(awk -v a="$1" '$1==a{$1=""; sub(/^ +/,""); print; exit}' $CACHE_AS 2>/dev/null)
   org_name "$n" "$1"
 }
 kn() { v=$(kv_get "$1" 0); case "$v" in ''|*[!0-9]*) echo 0;; *) echo "$v";; esac; }   # numeric kv value, 0 if broken

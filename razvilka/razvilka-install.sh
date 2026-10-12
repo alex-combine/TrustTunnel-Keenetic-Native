@@ -80,11 +80,15 @@ if [ $LNG = ru ]; then cat <<'EOF'
       (быстро; банки, госуслуги и местные сервисы не ругаются на VPN);
     • всё остальное — через ваш VPN.
   Роутер сам собирает карту сетей страны и обновляет её каждую ночь.
-  Управление — из вашего личного Telegram-бота: проверить сайт и пустить его
-  напрямую или через VPN, переключить устройство, получить тревогу, если VPN пропал.
+  Управление — из вашего личного Telegram-бота:
+    🔎 прислали адрес сайта — бот скажет, куда он идёт, и поменяет одной кнопкой;
+    📱 у каждого устройства своё правило; 💡 подскажет, если что-то своё шло через VPN;
+    ☀️ утренняя сводка, 🕰 тревога, если пропал VPN или свет;
+    🛠 VPN завис — роутер сам его перезапустит и не даст себе зависнуть.
 
   Что понадобится: работающий VPN в Keenetic и свой бот (@BotFather → /newbot).
   Сначала я всё проверю и покажу план — без вашего «да» ничего не меняю.
+  Хотите просто посмотреть? Запустите с --demo: проверка и план, без изменений.
   Удалить потом: sh razvilka-install.sh --uninstall. Это бета: о проблемах пишите
   в Issues на GitHub (alex-combine/TrustTunnel-Keenetic-Native).
 EOF
@@ -94,11 +98,15 @@ else cat <<'EOF'
       (fast; local banks, government and other services do not complain about a VPN);
     • everything else — through your VPN.
   The router builds the map of your country's networks itself and refreshes it every night.
-  You control it from your own Telegram bot: check a site and send it direct or via VPN,
-  switch a device, get an alert when the VPN drops.
+  You control it from your own Telegram bot:
+    🔎 send a site address — the bot tells where it goes and switches it with one tap;
+    📱 a rule per device; 💡 a hint when something local went via VPN;
+    ☀️ a morning summary, 🕰 an alarm when the VPN or power is gone;
+    🛠 the VPN hangs — the router restarts it by itself and does not hang itself.
 
   You will need: a working VPN in Keenetic and your own bot (@BotFather → /newbot).
   First I check everything and show the plan — nothing changes without your "yes".
+  Just want a look? Run with --demo: checks and the plan, no changes.
   To remove later: sh razvilka-install.sh --uninstall. This is a beta: please report problems
   in Issues on GitHub (alex-combine/TrustTunnel-Keenetic-Native).
 EOF

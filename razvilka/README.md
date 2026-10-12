@@ -51,15 +51,18 @@ Everything the installer added is removed in reverse order. Answer "yes" to the 
 
 ## What the bot does
 - 📊 **Status** — VPN, router memory, freshness of the country map.
+- 📋 **My exceptions** — everything you changed on top of the country map; tap a line to remove it.
 - 🔎 **Site** — send an address: the bot tells where it goes now and lets you send it direct or via VPN. Understands internationalized domains.
 - 📱 **Devices** — for each: "home country direct" or "everything via VPN".
-- ⚙️ **Settings** — country on/off, morning summary, hints, "undo to yesterday", 🕰 watchdog.
+- ⚙️ **Settings** — country on/off, morning summary, hints, "undo to yesterday", 🕰 connection watchdog. ✅/⬜ is a switch (tap — it switches), «→» opens its own screen, «…» asks first.
+- 💡 **Hints** — when something from your home country went via VPN, the bot tells which company, which device and which site, and offers to let it go direct. Recognise it — «Send direct»; don't — «No, thanks».
+- Long buttons (send direct, remove, switch) answer at once with «⏳ …», take the buttons away and write when done — there is nothing to press twice.
 - Alerts: VPN lost and back, low memory, map not updated. While there is no connection, alerts are queued and arrive together when it is back.
 - **🕰 Connection watchdog (optional)** — an outside service (a «dead man’s hand»): the router tells it «I am alive» every 5 minutes, and if the signals stop (no power, internet or VPN), the watchdog sends you an alarm by email or Telegram. healthchecks.io is recommended; tracker.ru (Russia) and cronitor.io work too. If the router is alive but the VPN is not, Razvilka raises the alarm at healthchecks and cronitor right away, straight through the ISP. The «🤫 Silence test» button checks that the alarm really reaches you (not every service catches silence). Instructions in the bot: ⚙️ Settings → 🕰 Connection watchdog.
 - **🛠 Self-healing** — every minute the router checks that data goes through the VPN. After 3 minutes without data, devices with a VPN policy get an instant «no DNS» instead of silence (their DNS does not answer in these minutes anyway, and without the refusal they retry without a pause and the router may hang; nothing leaks to the ISP), and the VPN connection is restarted (every 30 minutes until it is back; TrustTunnel and WireGuard by themselves, others — put the connection name `VPN_NDM=` into `net.conf`). 3 minutes after a restart that did not help, your own script `/opt/etc/razvilka/heal2.sh` runs, if it exists. To turn off: `GUARD=0` (all), `FUSE=0` (no DNS refusal) or `HEAL=0` (no restart) in `net.conf`.
 
 ## Troubleshooting
-- **Status says the VPN is not answering.** Check the VPN connection in the Keenetic web panel; if it does not recover in 10 minutes, reboot the router. Razvilka never turns the VPN off by itself.
+- **Status says the VPN is not answering.** If 🛠 Self-healing is on (the default), the router restarts the connection by itself within minutes and tells you. If it does not recover in 15 minutes, check the VPN in the Keenetic web panel and reboot the router.
 - **A site does not open.** Send its address to the bot: it shows whether the site goes direct or via VPN, and you can switch it with one button. If something broke after an update, use ⚙️ Settings → ↩️ Undo to yesterday.
 - **The router is low on memory.** Turn on the «light map» (the bot offers it) or use a router with 256 MB of RAM or more.
 - **The country map was not rebuilt tonight.** The build waits for a working VPN and enough free memory; if the VPN drops during the build, it stops and tries again the next night (see `/opt/var/log/ttwatch/direct-routes.log`).
@@ -71,7 +74,8 @@ Everything the installer added is removed in reverse order. Answer "yes" to the 
 - No telemetry: Razvilka sends nothing to the author.
 - The bot token stays on your router only (`/opt/etc/razvilka/tg.env`, root-only, mode 600).
 - The bot answers its owner only. Text from Telegram is never passed into router commands: site addresses are strictly validated.
-- To learn the country and owner of an address, Razvilka queries public databases (RIPE, Team Cymru) through your VPN.
+- To learn the country and owner of an address, Razvilka queries public databases (RIPE, Team Cymru) through your VPN; for hints — the site name of an address (a reverse DNS query).
+- 🕰 The connection watchdog (if you turn it on) only gets an «I am alive» signal from the router — no addresses, no content.
 
 ## Files on the router
 | Path | What |

@@ -365,6 +365,7 @@ Prefer e-mail? On the GitHub page click **Watch → Custom → Releases**.
 An optional add-on in [`razvilka/`](razvilka/README.md). Sites and services of your own country go direct through the ISP (fast, local banks and government sites are happy), everything else goes through the VPN. The router builds the map of your country's networks itself every night, and you control it from your own Telegram bot that runs on the router: check a site, send it direct or via VPN, switch a device, get alerts when the VPN drops.
 
 - Works with **any VPN connection in Keenetic** — TrustTunnel is not required.
+- 💡 Hints when something local went via VPN; 🕰 an alarm when the VPN or power is gone; 🛠 restarts a hung VPN by itself and keeps the router from hanging.
 - Off unless you install it; its own installer has a dry run, rollback and `--uninstall`.
 - **Beta**: tested on Keenetic Hero 4G (KN-2310, 128 MB).
 

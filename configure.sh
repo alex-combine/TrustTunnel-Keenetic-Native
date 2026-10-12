@@ -327,9 +327,19 @@ fi
 RZV_DIR="/opt/tmp/razvilka-setup"
 RZV_GOT=""
 echo ""
-echo "Razvilka (beta, optional): sites of your own country go direct, everything else via VPN,"
-echo "controlled from your own Telegram bot. Works with any VPN connection. See razvilka/README.md"
-if ask_yes_no "Download Razvilka now? It is installed separately, once the VPN works"; then
+echo "--------------------------------------------------------------------"
+echo " Razvilka (optional, beta) - two roads for your home internet"
+echo "--------------------------------------------------------------------"
+echo " * Banks, government and local services of your country open directly:"
+echo "   fast, and they stop complaining about the VPN."
+echo " * Everything else stays behind your VPN."
+echo " * Your own Telegram bot on the router: check any site and switch it with"
+echo "   one tap, per-device rules, a morning summary, an alarm if the VPN drops,"
+echo "   and the router restarts a hung VPN by itself."
+echo " Now it is only downloaded - nothing changes. Try it later with a dry run"
+echo " (--demo) that changes nothing; remove it with one command. Works with any"
+echo " VPN connection in Keenetic. More: razvilka/README.md"
+if ask_yes_no "Download Razvilka to try it later?"; then
     mkdir -p "$RZV_DIR"
     if curl -fsSL "$REPO_URL/razvilka.tar.gz" -o /opt/tmp/razvilka.tar.gz && tar xzf /opt/tmp/razvilka.tar.gz -C "$RZV_DIR"; then
         RZV_GOT="yes"
@@ -339,7 +349,7 @@ if ask_yes_no "Download Razvilka now? It is installed separately, once the VPN w
     fi
     rm -f /opt/tmp/razvilka.tar.gz
 else
-    echo "Razvilka skipped."
+    echo "Razvilka skipped. You can get it any time: see razvilka/README.md"
 fi
 
 echo ""
