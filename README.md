@@ -140,6 +140,25 @@ The installation script will perform the following:
 8. Find the `config.toml` exported on the server (in `/opt/tmp/` and other usual places, or ask for its path or a `tt://` link), build the client config from it (the right listener for the mode, kill switch on, file closed with 600), start the VPN and check that the internet really goes through it. If it does not within 2 minutes, roll back and show the last log lines
 9. In TUN mode, when the VPN works: offer to install Razvilka right away (optional)
 
+### TrustTunnel already installed? Updating from any version
+
+The same single command. Before changing anything the installer looks at what is on the router and shows a «Found → Plan» screen:
+
+| What is installed | What the installer does |
+|---|---|
+| This project, attach mode | Updates the service scripts and tt-stats, turns the kill switch on, restarts and checks the VPN, offers to install or update Razvilka |
+| The original TrustTunnel-Keenetic or this project in the classic TUN mode | The same, plus switches to attach mode with `tt-stats enable` (own check and rollback, boot guard) and offers one reboot for the statistics |
+| SOCKS5 mode (any project) | Updates the scripts, keeps the mode and the web panel settings; for TUN and Razvilka — «set up again» and move the device policies in the web panel |
+| Unclear (some files are missing) | Changes nothing by itself, offers «set up again» |
+
+Your server address and password are kept: when the mode changes the installer rebuilds your current client config, `config.toml` from the server is not needed. Old files are copied to `/opt/backup/tt_update_<time>/`; if the VPN does not work after the update, everything is put back automatically. Every step goes to the journal `/opt/var/log/tt-install.log`; after an interruption just run the command again — the steps are safe to repeat.
+
+See what is installed and what would be done, changing nothing:
+```bash
+curl -fsSL https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download/install.sh | sh -s -- --check
+```
+Attach its output to a question in Issues.
+
 ### Mode Comparison
 
 | | SOCKS5 (ProxyN) | TUN (OpkgTunN) |

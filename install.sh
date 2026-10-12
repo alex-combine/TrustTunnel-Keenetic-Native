@@ -26,6 +26,10 @@ while [ $# -gt 0 ]; do
             TT_LANG="${1#--lang=}"
             shift
             ;;
+        --check)
+            TT_CHECK=1
+            shift
+            ;;
         *)
             shift
             ;;
@@ -79,4 +83,4 @@ else
 fi
 chmod +x "$CONFIGURE_SCRIPT"
 
-REPO_URL="$REPO_URL" TT_LANG="$TT_LANG" sh "$CONFIGURE_SCRIPT"
+REPO_URL="$REPO_URL" TT_LANG="$TT_LANG" TT_CHECK="${TT_CHECK:-}" sh "$CONFIGURE_SCRIPT"

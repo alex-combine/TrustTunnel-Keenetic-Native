@@ -55,6 +55,13 @@
   and runs its installer in the same language (its own plan and «yes»). The offer says what it takes from the
   router: about 1 MB on the USB stick, about 8 MB of RAM, an almost idle CPU; the same is in the Razvilka
   installer and README.
+- **Update from any version:** before changing anything the installer detects what is on the router (this
+  project in attach or classic mode, the original TrustTunnel-Keenetic, SOCKS5, nothing, or unclear) and shows
+  «Found → Plan». «Update and keep your settings» backs the old files up to `/opt/backup/tt_update_<time>/`,
+  updates the scripts, turns the kill switch on, restarts and checks the VPN (rolls back if it fails), moves a
+  classic TUN install to attach with `tt-stats enable` and offers Razvilka. SOCKS5 is kept as it is. A mode
+  change rebuilds the current client config (no server file needed); a SOCKS5 config is no longer kept by
+  mistake after choosing TUN. `install.sh --check` only reports; every step goes to `/opt/var/log/tt-install.log`.
 
 ## v2.3.2 — the router does not choke when the VPN drops at night
 
