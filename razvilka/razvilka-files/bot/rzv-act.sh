@@ -131,15 +131,18 @@ FUSE_CH=RZVFUSE
 fuse_rules_on() {
   m=$(policy_macs); [ -n "$m" ] || { log "предохранитель DNS: не нашёл устройств с VPN-политикой — не ставлю"; return 1; }
   for T in iptables ip6tables; do
+    command -v $T >/dev/null 2>&1 || continue   # no IPv6 tools on some routers: IPv4 is enough then
     if [ $T = iptables ]; then R=icmp-port-unreachable; else R=icmp6-port-unreachable; fi
     $T -w -N $FUSE_CH 2>/dev/null; $T -w -F $FUSE_CH
     $T -w -A $FUSE_CH -p udp --dport 53 -j REJECT --reject-with $R
     $T -w -A $FUSE_CH -p tcp --dport 53 -j REJECT --reject-with tcp-reset
     for x in $m; do $T -w -C INPUT -i br+ -m mac --mac-source $x -j $FUSE_CH 2>/dev/null || $T -w -I INPUT 1 -i br+ -m mac --mac-source $x -j $FUSE_CH; done
   done
+  return 0   # the fuse must be remembered once any rule is in, or nobody would take it off
 }
 fuse_rules_off() {
   for T in iptables ip6tables; do
+    command -v $T >/dev/null 2>&1 || continue
     $T -w -S INPUT 2>/dev/null | grep -- "-j $FUSE_CH" | sed 's/^-A /-D /' | while read -r r; do eval "$T -w $r" 2>/dev/null; done
     $T -w -F $FUSE_CH 2>/dev/null; $T -w -X $FUSE_CH 2>/dev/null
   done
