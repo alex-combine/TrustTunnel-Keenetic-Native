@@ -7,7 +7,7 @@ set -e
 # Language (ru|en) comes from install.sh in TT_LANG; asked here if missing
 case "$TT_LANG" in ru|en) ;; *)
     printf "Язык / Language: 1) Русский  2) English [1]: "
-    if read lang_choice < /dev/tty 2>/dev/null; then
+    if { read -r lang_choice < /dev/tty; } 2>/dev/null; then
         case "$lang_choice" in 2|en|EN|e|E) TT_LANG=en ;; *) TT_LANG=ru ;; esac
     else TT_LANG=en; fi ;;
 esac
@@ -19,12 +19,31 @@ if [ -z "$REPO_URL" ]; then
     exit 1
 fi
 
+RESTORE_BK=""
+IFACE_REMOVED=""
+# Put the saved files back (no in-place overwrite of running scripts) and start the VPN again
+restore_from() {  # $1 = backup dir
+    /opt/etc/init.d/S99trusttunnel stop >/dev/null 2>&1 || true
+    for _p in S99trusttunnel:/opt/etc/init.d/S99trusttunnel 010-trusttunnel.sh:/opt/etc/ndm/wan.d/010-trusttunnel.sh \
+              tt-stats:/opt/bin/tt-stats trusttunnel_client.toml:/opt/trusttunnel_client/trusttunnel_client.toml \
+              mode.conf:/opt/trusttunnel_client/mode.conf; do
+        if [ -f "$1/${_p%%:*}" ]; then cp -p "$1/${_p%%:*}" "${_p#*:}.rb" && mv "${_p#*:}.rb" "${_p#*:}"; fi
+    done
+    /opt/etc/init.d/S99trusttunnel start >/dev/null 2>&1 || true
+}
+
 cleanup_on_error() {
     exit_code=$?
-    jlog "END setup code=$exit_code" 2>/dev/null || true
-    if [ $exit_code -ne 0 ]; then
-        echo ""
-        echo "!!! $(L 'Установка прервана из-за ошибки' 'Installation aborted due to error') ($(L 'код' 'code'): $exit_code) !!!"
+    trap - EXIT INT TERM HUP
+    { jlog "END setup code=$exit_code"; } 2>/dev/null || true
+    [ "$exit_code" -eq 0 ] && return 0
+    echo ""
+    echo "!!! $(L 'Установка прервана' 'Installation aborted') ($(L 'код' 'code'): $exit_code) !!!"
+    if [ -n "$RESTORE_BK" ]; then
+        restore_from "$RESTORE_BK"
+        echo "$(L 'Вернул прежние файлы из' 'Put the previous files back from') $RESTORE_BK $(L 'и снова запустил VPN.' 'and started the VPN again.')"
+        echo "$(L 'Когда будете готовы — запустите установщик ещё раз.' 'Run the installer again when you are ready.')"
+    else
         echo "$(L 'Чтобы поставить заново, запустите скрипт ещё раз.' 'To reinstall, run the script again.')"
         echo "$(L 'Чтобы убрать вручную, удалите:' 'To clean up manually, delete:')"
         echo "  rm -f /opt/etc/init.d/S99trusttunnel"
@@ -35,6 +54,7 @@ cleanup_on_error() {
     fi
 }
 trap cleanup_on_error EXIT
+trap 'exit 130' INT TERM HUP
 
 if [ ! -d "/opt" ]; then
     echo "$(L 'Ошибка: нет /opt. Сначала установите Entware.' 'Error: /opt not found. Install Entware first.')"
@@ -59,7 +79,11 @@ ask_yes_no() {
 
 # === What is on the router already? Decided BEFORE anything changes ===
 TT_JOURNAL="/opt/var/log/tt-install.log"
-jlog() { mkdir -p /opt/var/log; echo "$(date '+%F %T') $*" >> "$TT_JOURNAL"; }
+jlog() { { mkdir -p /opt/var/log && echo "$(date '+%F %T') $*" >> "$TT_JOURNAL"; } 2>/dev/null || true; }
+socks_addr() {  # address of [listener.socks] in a client config, 127.0.0.1:1080 by default
+    _a=$(awk '/^[[:space:]]*\[listener\.socks\]/ {f = 1; next} /^[[:space:]]*\[/ {f = 0} f && /^[[:space:]]*address[[:space:]]*=/ {gsub(/^[^"]*"|".*$/, ""); print; exit}' "$1" 2>/dev/null) || _a=""
+    echo "${_a:-127.0.0.1:1080}"
+}
 D_MC="/opt/trusttunnel_client/mode.conf"
 D_CFG="/opt/trusttunnel_client/trusttunnel_client.toml"
 D_INIT="/opt/etc/init.d/S99trusttunnel"
@@ -72,16 +96,23 @@ fi
 D_HASCFG=""; grep -q '^\[endpoint\]' "$D_CFG" 2>/dev/null && D_HASCFG=1
 D_ATTACH=""; grep -q '^[[:space:]]*use_existing[[:space:]]*=[[:space:]]*true' "$D_CFG" 2>/dev/null && D_ATTACH=1
 D_OURS=""; grep -q '^ensure_device()' "$D_INIT" 2>/dev/null && D_OURS=1
-D_KS=""; grep -q '^killswitch_enabled[[:space:]]*=[[:space:]]*true' "$D_CFG" 2>/dev/null && D_KS=1
+D_KS=""; grep -q '^[[:space:]]*killswitch_enabled[[:space:]]*=[[:space:]]*true' "$D_CFG" 2>/dev/null && D_KS=1
+D_CLVER=$(/opt/trusttunnel_client/trusttunnel_client --version 2>/dev/null | awk '{print $2; exit}') || D_CLVER=""
+D_CLOLD=""
+if [ -n "$D_CLVER" ] && ! awk -v a="$D_CLVER" -v b="1.0.62" 'BEGIN { split(a, x, "."); split(b, y, ".")
+        for (i = 1; i <= 3; i++) { if (x[i] + 0 > y[i] + 0) exit 0; if (x[i] + 0 < y[i] + 0) exit 1 }
+        exit 0 }'; then D_CLOLD=1; fi
+D_SOCKS=$(socks_addr "$D_CFG")
 D_RZV=""; [ -x /opt/etc/init.d/S99razvilka ] && D_RZV=1
 D_VPN=""
 if [ "$D_MODE" = "tun" ]; then
     _c=$(curl -s -o /dev/null -w '%{http_code}' --interface "opkgtun$D_IDX" --max-time 6 http://connectivitycheck.gstatic.com/generate_204 2>/dev/null) || _c=""
 elif [ "$D_MODE" = "socks5" ]; then
-    _c=$(curl -s -o /dev/null -w '%{http_code}' --socks5-hostname 127.0.0.1:1080 --max-time 6 http://connectivitycheck.gstatic.com/generate_204 2>/dev/null) || _c=""
+    _c=$(curl -s -o /dev/null -w '%{http_code}' --socks5-hostname "$D_SOCKS" --max-time 6 http://connectivitycheck.gstatic.com/generate_204 2>/dev/null) || _c=""
 else _c=""; fi
 [ "$_c" = "204" ] && D_VPN=1
-D_FREE=$(df -k /opt 2>/dev/null | awk 'NR==2 {print int($4/1024)}'); D_FREE=${D_FREE:-0}
+D_FREE=$(df -Pk /opt 2>/dev/null | awk 'END {print int($(NF-2)/1024)}') || D_FREE=""
+case "$D_FREE" in ''|*[!0-9]*) D_FREE=999 ;; esac   # unknown — do not block
 
 if [ -x "$D_INIT" ] && [ -n "$D_MODE" ] && [ -n "$D_HASCFG" ]; then
     if [ "$D_MODE" = "socks5" ]; then D_STATE="socks"
@@ -116,7 +147,11 @@ case "$D_STATE" in
     classic) echo "  $(L '• обновлю служебные скрипты и tt-stats (копия старых — в /opt/backup)' '• update the service scripts and tt-stats (old ones backed up to /opt/backup)')"
              [ -z "$D_KS" ] && echo "  $(L '• включу kill switch' '• turn the kill switch on')"
              echo "  $(L '• перезапущу VPN и проверю; не заработал — верну всё как было' '• restart the VPN and check it; if it fails — put everything back')"
-             echo "  $(L '• переведу на новый режим attach через tt-stats enable (своя проверка и откат, сторож загрузки)' '• switch to attach mode with tt-stats enable (own check and rollback, boot guard)')"
+             if [ -n "$D_CLOLD" ]; then
+                 echo "  $(L "• клиент $D_CLVER старше 1.0.62 — новому режиму нужен клиент новее: выберите «2 — настроить заново» и ответьте «д» на вопрос о клиенте" "• client $D_CLVER is older than 1.0.62 — the new mode needs a newer client: choose «2 — set up again» and answer «y» to the client question")"
+             else
+                 echo "  $(L '• переведу на новый режим attach через tt-stats enable (своя проверка и откат, сторож загрузки)' '• switch to attach mode with tt-stats enable (own check and rollback, boot guard)')"
+             fi
              echo "  $(L '• Развилка по желанию; в конце — одна перезагрузка для статистики в веб-панели' '• Razvilka optional; at the end — one reboot for the dashboard statistics')" ;;
     socks)   echo "  $(L '• обновлю служебные скрипты и tt-stats, режим SOCKS5 и настройки веб-панели не трогаю' '• update the service scripts and tt-stats, keep SOCKS5 and the web panel settings')"
              [ -z "$D_KS" ] && echo "  $(L '• включу kill switch' '• turn the kill switch on')"
@@ -131,7 +166,7 @@ if [ "$D_FREE" -lt 2 ] && [ "$D_STATE" != fresh ]; then
     [ -n "$TT_CHECK" ] || { trap - EXIT; exit 1; }
 fi
 if [ -f "$TT_JOURNAL" ] && tail -n 1 "$TT_JOURNAL" | grep -qv ' END'; then
-    echo "  $(L 'Прошлый запуск прервался на шаге' 'The previous run stopped at step'): $(tail -n 1 "$TT_JOURNAL" | cut -d' ' -f3-) — $(L 'продолжу, шаги можно повторять' 'continuing, the steps are safe to repeat')"
+    echo "  $(L 'Прошлый запуск не дошёл до конца (последний шаг' 'The previous run did not finish (last step'): $(tail -n 1 "$TT_JOURNAL" | cut -d' ' -f3-)). $(L 'Этот запуск пройдёт все шаги заново — это безопасно.' 'This run goes through all steps again — that is safe.')"
 fi
 echo ""
 if [ -n "$TT_CHECK" ]; then
@@ -143,9 +178,17 @@ fi
 if [ "$D_STATE" = attach ] || [ "$D_STATE" = classic ] || [ "$D_STATE" = socks ]; then
     echo "  1) $(L 'Обновить, сохранив ваши настройки (рекомендую)' 'Update and keep your settings (recommended)')"
     echo "  2) $(L 'Настроить заново (все вопросы)' 'Set up again (all questions)')"
+    echo "  3) $(L 'Выйти, ничего не меняя' 'Quit, change nothing')"
     printf "%s [1]: " "$(L 'Выбор' 'Choice')"
-    read -r up_choice < /dev/tty || up_choice=""
-    [ "$up_choice" = 2 ] && D_STATE="reconfigure"
+    if ! { read -r up_choice < /dev/tty; } 2>/dev/null; then
+        echo ""; echo "$(L 'Нет терминала для вопросов — ничего не меняю. Запустите команду в окне SSH.' 'No terminal for questions — nothing changed. Run the command in an SSH window.')"
+        trap - EXIT; exit 1
+    fi
+    case "$up_choice" in
+        ''|1) ;;
+        2) D_STATE="reconfigure" ;;
+        *) echo "$(L 'Хорошо, ничего не меняю.' 'OK, nothing changed.')"; trap - EXIT; exit 0 ;;
+    esac
 elif [ "$D_STATE" = unclear ]; then
     ask_yes_no "$(L 'Настроить заново?' 'Set up again?')" || { trap - EXIT; exit 0; }
 fi
@@ -156,21 +199,26 @@ if [ "$D_STATE" = attach ] || [ "$D_STATE" = classic ] || [ "$D_STATE" = socks ]
     for f in "$D_INIT" /opt/etc/ndm/wan.d/010-trusttunnel.sh /opt/bin/tt-stats "$D_CFG" "$D_MC"; do [ -f "$f" ] && cp -p "$f" "$BK/"; done
     chmod 600 "$BK/trusttunnel_client.toml" 2>/dev/null || true
     jlog "step backup $BK"
+    RESTORE_BK="$BK"
     echo "$(L 'Копия старых файлов' 'Backup of the old files'): $BK"
     echo "$(L 'Скачиваю новые скрипты...' 'Downloading the new scripts...')"
     curl -fsSL "$REPO_URL/S99trusttunnel" -o "$W/S99trusttunnel" && curl -fsSL "$REPO_URL/010-trusttunnel.sh" -o "$W/010-trusttunnel.sh" && \
         curl -fsSL "$REPO_URL/tt-stats" -o "$W/tt-stats" && sh -n "$W/S99trusttunnel" && sh -n "$W/tt-stats" || {
         echo "⛔ $(L 'Не скачалось — ничего не менял.' 'Download failed — nothing changed.')"; jlog "END failed download"; rm -rf "$W"; trap - EXIT; exit 1; }
     jlog "step download"
+    sed -i "s|^TTS_REPO_URL=.*|TTS_REPO_URL=\"\${TTS_REPO_URL:-$REPO_URL}\"|" "$W/tt-stats"
+    chmod +x "$W/S99trusttunnel" "$W/010-trusttunnel.sh" "$W/tt-stats"
     "$D_INIT" stop >/dev/null 2>&1 || true
-    cp "$W/S99trusttunnel" "$D_INIT"; chmod +x "$D_INIT"
-    mkdir -p /opt/etc/ndm/wan.d; cp "$W/010-trusttunnel.sh" /opt/etc/ndm/wan.d/010-trusttunnel.sh; chmod +x /opt/etc/ndm/wan.d/010-trusttunnel.sh
-    mkdir -p /opt/bin; cp "$W/tt-stats" /opt/bin/tt-stats
-    sed -i "s|^TTS_REPO_URL=.*|TTS_REPO_URL=\"\${TTS_REPO_URL:-$REPO_URL}\"|" /opt/bin/tt-stats; chmod +x /opt/bin/tt-stats
+    mkdir -p /opt/etc/ndm/wan.d /opt/bin
+    # copy next to the target and rename: a running script keeps reading its old file
+    cp -p "$W/S99trusttunnel" "$D_INIT.new" && mv "$D_INIT.new" "$D_INIT"
+    cp -p "$W/010-trusttunnel.sh" /opt/etc/ndm/wan.d/010-trusttunnel.sh.new && mv /opt/etc/ndm/wan.d/010-trusttunnel.sh.new /opt/etc/ndm/wan.d/010-trusttunnel.sh
+    cp -p "$W/tt-stats" /opt/bin/tt-stats.new && mv /opt/bin/tt-stats.new /opt/bin/tt-stats
     /opt/bin/tt-stats update-check --install-cron >/dev/null 2>&1 || true
+    [ -x /opt/etc/init.d/S97tt-memguard ] && { /opt/etc/init.d/S97tt-memguard restart >/dev/null 2>&1 || true; }
     rm -rf "$W"
     if [ -z "$D_KS" ]; then
-        if grep -q '^killswitch_enabled' "$D_CFG"; then sed -i 's/^killswitch_enabled.*/killswitch_enabled = true/' "$D_CFG"
+        if grep -q '^[[:space:]]*killswitch_enabled' "$D_CFG"; then sed -i 's/^[[:space:]]*killswitch_enabled.*/killswitch_enabled = true/' "$D_CFG"
         else { echo "killswitch_enabled = true"; cat "$D_CFG"; } > "$D_CFG.new" && mv "$D_CFG.new" "$D_CFG"; fi
         chmod 600 "$D_CFG"
     fi
@@ -182,19 +230,14 @@ if [ "$D_STATE" = attach ] || [ "$D_STATE" = classic ] || [ "$D_STATE" = socks ]
         if [ "$D_MODE" = tun ]; then
             _c=$(curl -s -o /dev/null -w '%{http_code}' --interface "opkgtun$D_IDX" --max-time 5 http://connectivitycheck.gstatic.com/generate_204 2>/dev/null) || _c=""
         else
-            _c=$(curl -s -o /dev/null -w '%{http_code}' --socks5-hostname 127.0.0.1:1080 --max-time 5 http://connectivitycheck.gstatic.com/generate_204 2>/dev/null) || _c=""
+            _c=$(curl -s -o /dev/null -w '%{http_code}' --socks5-hostname "$D_SOCKS" --max-time 5 http://connectivitycheck.gstatic.com/generate_204 2>/dev/null) || _c=""
         fi
         [ "$_c" = 204 ] && { U_OK=1; break; }
         sleep 5; _n=$((_n + 1))
     done
     if [ -z "$U_OK" ] && [ -n "$D_VPN" ]; then
         echo "⛔ $(L 'После обновления VPN не заработал — возвращаю старые файлы.' 'The VPN did not start after the update — restoring the old files.')"
-        "$D_INIT" stop >/dev/null 2>&1 || true
-        cp -p "$BK/S99trusttunnel" "$D_INIT" 2>/dev/null || true
-        cp -p "$BK/010-trusttunnel.sh" /opt/etc/ndm/wan.d/010-trusttunnel.sh 2>/dev/null || true
-        cp -p "$BK/tt-stats" /opt/bin/tt-stats 2>/dev/null || true
-        cp -p "$BK/trusttunnel_client.toml" "$D_CFG" 2>/dev/null || true
-        "$D_INIT" start >/dev/null 2>&1 || true
+        restore_from "$BK"; RESTORE_BK=""
         jlog "END rolled back"
         echo "   $(L 'Вернул как было. Журнал клиента' 'Rolled back. Client log'): /opt/var/log/trusttunnel.log"
         trap - EXIT; exit 1
@@ -203,10 +246,14 @@ if [ "$D_STATE" = attach ] || [ "$D_STATE" = classic ] || [ "$D_STATE" = socks ]
     [ -n "$U_OK" ] && echo "✅ $(L 'Обновлено, VPN работает.' 'Updated, the VPN works.')"
     [ -z "$U_OK" ] && echo "🟡 $(L 'Файлы обновлены, но VPN не работал и до обновления — проверьте сервер и журнал /opt/var/log/trusttunnel.log.' 'Files updated, but the VPN did not work before the update either — check the server and /opt/var/log/trusttunnel.log.')"
     NEED_REBOOT=""
-    if [ "$D_STATE" = classic ] && [ -n "$U_OK" ]; then
+    RESTORE_BK=""   # files and VPN are fine from here on; tt-stats enable has its own rollback
+    if [ "$D_STATE" = classic ] && [ -n "$U_OK" ] && [ -n "$D_CLOLD" ]; then
+        echo "🟡 $(L "Клиент $D_CLVER старше 1.0.62 — новый режим не включаю. Обновите клиент: запустите установщик, выберите «2 — настроить заново» и ответьте «д» на вопрос о клиенте." "Client $D_CLVER is older than 1.0.62 — the new mode is not turned on. Update the client: run the installer, choose «2 — set up again» and answer «y» to the client question.")"
+    elif [ "$D_STATE" = classic ] && [ -n "$U_OK" ]; then
         echo ""
         echo "$(L 'Перевожу на режим attach (tt-stats enable, около 3 минут, сама проверяет и откатывает)...' 'Switching to attach mode (tt-stats enable, about 3 minutes, checks and rolls back by itself)...')"
-        if /opt/bin/tt-stats enable; then D_STATE=attach; NEED_REBOOT=1; jlog "step attach ok"
+        # a dropped SSH session must not kill the switch or its 10-minute safety timer
+        if ( trap '' HUP; /opt/bin/tt-stats enable ); then D_STATE=attach; NEED_REBOOT=1; jlog "step attach ok"
         else echo "🟡 $(L 'Перевод не удался и откатан — VPN работает по-старому. Подробности' 'The switch failed and was rolled back — the VPN works the old way. Details'): /opt/var/log/tt-stats.log"; jlog "step attach failed"; fi
     fi
     if [ "$D_STATE" = socks ]; then
@@ -244,6 +291,13 @@ if [ "$D_STATE" = attach ] || [ "$D_STATE" = classic ] || [ "$D_STATE" = socks ]
     trap - EXIT; exit 0
 fi
 jlog "START setup ($D_STATE)"
+if [ "$D_STATE" != fresh ]; then
+    BK="/opt/backup/tt_setup_$(date +%Y%m%d_%H%M%S)"; mkdir -p "$BK"
+    for f in "$D_INIT" /opt/etc/ndm/wan.d/010-trusttunnel.sh /opt/bin/tt-stats "$D_CFG" "$D_MC"; do [ -f "$f" ] && cp -p "$f" "$BK/"; done
+    chmod 600 "$BK/trusttunnel_client.toml" 2>/dev/null || true
+    RESTORE_BK="$BK"
+    echo "$(L 'Копия нынешних файлов' 'Backup of the current files'): $BK"
+fi
 
 # === Stop running service ===
 INIT_SCRIPT="/opt/etc/init.d/S99trusttunnel"
@@ -449,6 +503,7 @@ if ask_yes_no "$(L 'Создать интерфейс TrustTunnel?' 'Create Trus
             if [ -n "$OLD_IFACE_NAME" ] && [ "$OLD_IFACE_NAME" != "$IFACE_NAME" ]; then
                 echo "$(L 'Убираю старый интерфейс' 'Removing old interface') ${OLD_IFACE_NAME}..."
                 ndmc -c "no interface ${OLD_IFACE_NAME}" || true
+                IFACE_REMOVED="$OLD_IFACE_NAME"
             fi
 
             if [ -n "$OLD_IFACE_NAME" ] && [ "$OLD_IFACE_NAME" = "$IFACE_NAME" ]; then
@@ -538,7 +593,7 @@ vpn_check() {  # up to 2 minutes: does the internet answer through the tunnel?
         if [ "$TT_MODE" = "tun" ]; then
             _c=$(curl -s -o /dev/null -w '%{http_code}' --interface "$TT_IF" --max-time 5 "$CHECK_URL" 2>/dev/null) || _c=""
         else
-            _c=$(curl -s -o /dev/null -w '%{http_code}' --socks5-hostname 127.0.0.1:1080 --max-time 5 "$CHECK_URL" 2>/dev/null) || _c=""
+            _c=$(curl -s -o /dev/null -w '%{http_code}' --socks5-hostname "$(socks_addr "$CFG")" --max-time 5 "$CHECK_URL" 2>/dev/null) || _c=""
         fi
         [ "$_c" = "204" ] && return 0
         sleep 5; _n=$((_n + 1))
@@ -621,7 +676,7 @@ else
         fi
     fi
     if [ -z "$KEEP" ]; then
-        SRC=$(find_endpoint_config) || SRC=""
+        if [ -n "$MISMATCH" ]; then SRC=""; else SRC=$(find_endpoint_config) || SRC=""; fi
         if [ -n "$SRC" ]; then
             echo "$(L 'Нашёл файл с сервера' 'Found the server file'): $SRC"
         elif [ -f "$CFG" ] && grep -q '^\[endpoint\]' "$CFG"; then
@@ -669,19 +724,27 @@ else
         /opt/etc/init.d/S99trusttunnel restart >/dev/null 2>&1 || true
         if vpn_check; then
             VPN_OK=1
+            RESTORE_BK=""
             echo "✅ $(L 'VPN работает: интернет идёт через TrustTunnel.' 'The VPN works: the internet goes through TrustTunnel.')"
+            if [ -n "$NEW" ] && [ -f "$SRC" ] && [ "$SRC" != "$CFG" ]; then
+                echo "   $(L "Файл с сервера $SRC больше не нужен, а в нём пароль — его можно удалить: rm $SRC" "The server file $SRC is no longer needed and holds the password — you can delete it: rm $SRC")"
+            fi
             [ -n "$CLASSIC" ] && [ -n "$NEW" ] && echo "   $(L 'Режим сменился с классического: статистика в веб-панели появится после перезагрузки роутера (tt-stats reboot).' 'The mode changed from classic: dashboard statistics appear after a router reboot (tt-stats reboot).')"
         else
             echo "⛔ $(L 'Интернет через VPN не пошёл за 2 минуты.' 'No internet through the VPN within 2 minutes.')"
             if [ -n "$NEW" ]; then
+                cp -p "$CFG" "$CFG.failed_$TS"; chmod 600 "$CFG.failed_$TS"
+                echo "   $(L 'Новый файл настроек сохранён для разбора' 'The new client config is kept for diagnosis'): $CFG.failed_$TS"
+            fi
+            if [ -n "$RESTORE_BK" ]; then
+                restore_from "$RESTORE_BK"
+                echo "   $(L 'Вернул прежние файлы (службу, настройки, mode.conf) из' 'Put the previous files (service, config, mode.conf) back from') $RESTORE_BK"
+                RESTORE_BK=""
+                [ -n "$IFACE_REMOVED" ] && echo "   $(L "Интерфейс $IFACE_REMOVED был удалён и сам не вернётся: запустите установщик ещё раз, выберите «2 — настроить заново» и прежний режим." "Interface $IFACE_REMOVED was removed and does not come back by itself: run the installer again, choose «2 — set up again» and the previous mode.")"
+            elif [ -n "$NEW" ]; then
                 /opt/etc/init.d/S99trusttunnel stop >/dev/null 2>&1 || true
-                mv "$CFG" "$CFG.failed_$TS"
-                chmod 600 "$CFG.failed_$TS"
-                if [ -f "$CFG.bak_$TS" ]; then
-                    cp -p "$CFG.bak_$TS" "$CFG"
-                    /opt/etc/init.d/S99trusttunnel start >/dev/null 2>&1 || true
-                fi
-                echo "   $(L 'Вернул как было: VPN остановлен, новый файл сохранён как' 'Rolled back: the VPN is stopped, the new file is kept as') $CFG.failed_$TS"
+                rm -f "$CFG"
+                echo "   $(L 'VPN остановлен, чтобы не мешать интернету.' 'The VPN is stopped so it does not get in the way of the internet.')"
             fi
             echo "   $(L 'Что пошло не так — последние строки журнала:' 'What went wrong — the last log lines:')"
             tail -n 5 /opt/var/log/trusttunnel.log 2>/dev/null | sed 's/^/     /' || true
@@ -768,7 +831,7 @@ if [ -n "$VPN_OK" ]; then
     exit 0
 fi
 if [ -z "$MANUAL" ]; then
-    echo "⛔ $(L 'VPN не заработал — причина выше, всё возвращено как было. Исправьте её и запустите установщик ещё раз.' 'The VPN did not start — the reason is above, everything is rolled back. Fix it and run the installer again.')"
+    echo "⛔ $(L 'VPN не заработал — причина и что возвращено, написано выше. Исправьте причину и запустите установщик ещё раз.' 'The VPN did not start — the reason and what was put back are above. Fix the reason and run the installer again.')"
     echo ""
     exit 0
 fi

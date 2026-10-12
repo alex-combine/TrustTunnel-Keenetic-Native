@@ -39,7 +39,7 @@ done
 # --- Language: Russian or English for the whole installer ---
 if [ "$TT_LANG" != ru ] && [ "$TT_LANG" != en ]; then
     printf "Язык / Language: 1) Русский  2) English [1]: "
-    if read lang_choice < /dev/tty 2>/dev/null; then
+    if { read -r lang_choice < /dev/tty; } 2>/dev/null; then
         case "$lang_choice" in 2|en|EN|e|E) TT_LANG=en ;; *) TT_LANG=ru ;; esac
     else
         echo ""; TT_LANG=en
