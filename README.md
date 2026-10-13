@@ -3,6 +3,7 @@
 [![Release](https://img.shields.io/github/v/release/alex-combine/TrustTunnel-Keenetic-Native)](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/alex-combine/TrustTunnel-Keenetic-Native/total)](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases)
 [![License](https://img.shields.io/github/license/alex-combine/TrustTunnel-Keenetic-Native)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/alex-combine/TrustTunnel-Keenetic-Native?style=flat)](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/stargazers)
 
 [🇷🇺 Инструкция на русском языке](README_ru.md)
 
@@ -15,6 +16,8 @@
 > - **Razvilka** (optional, beta): sites of your own country go direct, everything else via VPN; your own Telegram bot on the router.
 >
 > Jump to: [Quick start](#quick-start) · [Updating](#trusttunnel-already-installed-updating-from-any-version) · [If something is wrong](#if-something-is-wrong) · [Razvilka](#razvilka-beta-home-country-direct-everything-else-via-vpn)
+>
+> ⭐ **Using it and like it?** Give the project a star on GitHub (the **Star** button at the top right) — it helps others find it and shows me the work is useful.
 
 ![The TrustTunnel TUN connection in the Keenetic web interface: live traffic graph, current speed and totals](docs/dashboard-stats.png)
 
@@ -749,6 +752,10 @@ ndmc -c 'interface OpkgTunN up'
 ndmc -c 'ip route default OpkgTunN'
 ndmc -c 'system configuration save'
 ```
+
+## Support the project
+
+If the installer saved you an evening and your router just works, please click ⭐ **Star** at the top of the page. It is free, takes a second and helps the project: other Keenetic owners find it by its stars. Found a bug or have an idea — open an [Issue](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/issues).
 
 ## Credits
 

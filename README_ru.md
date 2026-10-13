@@ -3,6 +3,7 @@
 [![Release](https://img.shields.io/github/v/release/alex-combine/TrustTunnel-Keenetic-Native)](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/alex-combine/TrustTunnel-Keenetic-Native/total)](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases)
 [![License](https://img.shields.io/github/license/alex-combine/TrustTunnel-Keenetic-Native)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/alex-combine/TrustTunnel-Keenetic-Native?style=flat)](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/stargazers)
 
 [🇺🇸 Read this in English](README.md)
 
@@ -15,6 +16,8 @@
 > - **Развилка** (по желанию, бета): сайты своей страны — напрямую, остальное — через VPN; свой Telegram-бот на роутере.
 >
 > Быстрые ссылки: [Быстрый старт](#быстрый-старт) · [Обновление](#уже-стоит-trusttunnel-обновление-из-любой-версии) · [Если что-то не так](#если-что-то-не-так) · [Развилка](#развилка-бета-своя-страна-напрямую-остальное-через-vpn)
+>
+> ⭐ **Пользуетесь и нравится?** Поставьте проекту звезду на GitHub (кнопка **Star** вверху справа) — так его проще найти другим, а мне видно, что работа нужна людям.
 
 ![Подключение TrustTunnel TUN в веб-интерфейсе Keenetic: живой график трафика, текущая скорость и счётчики](docs/dashboard-stats.png)
 
@@ -749,6 +752,10 @@ ndmc -c 'interface OpkgTunN up'
 ndmc -c 'ip route default OpkgTunN'
 ndmc -c 'system configuration save'
 ```
+
+## Поддержать проект
+
+Если установщик сэкономил вам вечер, а роутер работает как надо, — поставьте ⭐ **Star** вверху страницы. Это бесплатно, занимает секунду и помогает проекту: по звёздам его находят другие владельцы Keenetic. Нашли ошибку или есть идея — пишите в [Issues](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/issues).
 
 ## Благодарности
 
