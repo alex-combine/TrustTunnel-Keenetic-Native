@@ -5,8 +5,19 @@ body:
   - type: markdown
     attributes:
       value: |
-        Please do not post your server address, credentials or `config.toml`.
-        Не публикуйте адрес сервера, логины, пароли и `config.toml`.
+        Please do not post your server address, credentials, `config.toml` or the Telegram bot token.
+        Не публикуйте адрес сервера, логины, пароли, `config.toml` и токен Telegram-бота.
+  - type: dropdown
+    id: part
+    attributes:
+      label: What is it about / Что не работает
+      options:
+        - Installer / Установщик (install.sh)
+        - TrustTunnel VPN / VPN
+        - Razvilka / Развилка
+        - Not sure / Не знаю
+    validations:
+      required: true
   - type: input
     id: router
     attributes:
@@ -31,9 +42,10 @@ body:
     attributes:
       label: Mode / Режим
       options:
-        - TUN — attach (tt-stats enable)
+        - TUN — attach
         - TUN — classic
         - SOCKS5
+        - Not sure / Не знаю
     validations:
       required: true
   - type: textarea
@@ -44,6 +56,12 @@ body:
     validations:
       required: true
   - type: textarea
+    id: check
+    attributes:
+      label: "Output of the installer check / Вывод проверки установщика"
+      description: "curl -fsSL https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download/install.sh | sh -s -- --check  (changes nothing / ничего не меняет)"
+      render: text
+  - type: textarea
     id: status
     attributes:
       label: "Output of `tt-stats status` and `/opt/etc/init.d/S99trusttunnel status` / Вывод этих команд"
@@ -52,5 +70,5 @@ body:
     id: log
     attributes:
       label: Log / Журнал
-      description: "tail -n 50 /opt/var/log/trusttunnel.log — remove addresses / уберите адреса"
+      description: "tail -n 50 /opt/var/log/trusttunnel.log; installer / установщик: /opt/var/log/tt-install.log; Razvilka / Развилка: tail -n 50 /opt/var/log/razvilka.log — remove addresses / уберите адреса"
       render: text

@@ -5,7 +5,12 @@
 The short version: `install.sh` now speaks Russian and English, sets the client up from the server file by itself,
 starts and checks the VPN (and puts everything back if it fails), updates any older install — including the
 original TrustTunnel-Keenetic — keeping its settings, and offers Razvilka at the end. Razvilka got self-healing,
-a connection watchdog, readable hints and many fixes from a live acceptance run. Details below.
+a connection watchdog, readable hints and many fixes from a live acceptance run. A live run on a router also
+fixed three old problems that affect every install: the service watchdog died when the SSH window was closed,
+a service restart caused a second VPN restart, and the memory guard could run twice. Details below.
+
+**Before updating**, see what the installer finds (changes nothing):
+`curl -fsSL https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download/install.sh | sh -s -- --check`
 
 
 - **Self-healing** (`rzv-act.sh guard`, every minute): after 3 minutes without data through the VPN,
