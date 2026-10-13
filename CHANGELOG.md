@@ -80,6 +80,8 @@ a connection watchdog, readable hints and many fixes from a live acceptance run.
 - Razvilka installer: the «light map» is suggested below 256 MB of RAM (as the text says), not below 200 MB.
 - Memory guard: turning it on twice in a row no longer leaves two guards running (the old guard, stopping late,
   deleted the new guard's PID file; two guards restarted the client twice). Found on a live router.
+- Init script: the watchdog no longer dies when the SSH session that ran the installer or
+  `S99trusttunnel restart` is closed (it ignores SIGHUP now). Found on a live router.
 
 ## v2.3.2 — the router does not choke when the VPN drops at night
 

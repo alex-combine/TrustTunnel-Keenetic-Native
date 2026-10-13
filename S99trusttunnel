@@ -368,8 +368,8 @@ start() {
     start_client
 
     log_info "Starting watchdog..."
-    $0 watchdog &
-    disown 2>/dev/null
+    # Ignore SIGHUP: started from an SSH session, the watchdog must outlive it
+    ( trap '' HUP; exec "$0" watchdog ) &
 
     log_info "$DESC with watchdog started"
 }
