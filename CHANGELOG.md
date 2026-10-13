@@ -50,7 +50,7 @@ a service restart caused a second VPN restart, and the memory guard could run tw
   the device that used it, the site name when the address tells it, and a plain tip which button to press.
   After «Send direct» the bot named another company (the network refresh reused the variable); the exception
   list and company screens show readable names too.
-- **Hints work again:** the group is written as «@policy» (every device with a VPN policy), and the hint
+- **Hints work again:** the group is written as «`@policy`» (every device with a VPN policy), and the hint
   check took that word for a device name, so it never found a single connection. Now it reads the group
   like direct-routes.sh does.
 - **Clearer bot settings:** ✅/⬜ are switches (a tap switches at once), «→» opens its own screen, «…» asks
