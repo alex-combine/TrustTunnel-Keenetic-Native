@@ -82,6 +82,8 @@ a connection watchdog, readable hints and many fixes from a live acceptance run.
   deleted the new guard's PID file; two guards restarted the client twice). Found on a live router.
 - Init script: the watchdog no longer dies when the SSH session that ran the installer or
   `S99trusttunnel restart` is closed (it ignores SIGHUP now). Found on a live router.
+- WAN hook: a restart of the service (installer, `S99trusttunnel restart`) no longer triggers a second
+  reload a few seconds later — the hook waits first, then checks how long ago the client started.
 
 ## v2.3.2 — the router does not choke when the VPN drops at night
 

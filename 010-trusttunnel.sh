@@ -24,6 +24,9 @@ if [ "$1" = "$NDMC_IFACE" ]; then
     exit 0
 fi
 
+# Wait first: an event fired while the service restarts itself must see the new start time
+sleep 5
+
 # Skip reload if client was started recently (prevents restart during startup)
 START_TS_FILE="/opt/var/run/trusttunnel_start_ts"
 GRACE_PERIOD=30
@@ -35,8 +38,6 @@ if [ -f "$START_TS_FILE" ]; then
         exit 0
     fi
 fi
-
-sleep 5
 
 # Only reload if the service was running (watchdog is alive)
 WATCHDOG_PID_FILE="/opt/var/run/trusttunnel_watchdog.pid"
