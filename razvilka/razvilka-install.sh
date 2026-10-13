@@ -137,8 +137,10 @@ elif [ "$MEMA" -lt 12 ]; then wrn "$(L 'Память' 'Memory'): $MEMT $(L МБ 
 else okm "$(L 'Память' 'Memory'): $MEMT $(L МБ MB), $(L 'свободно' 'free') $MEMA $(L МБ MB)"; fi
 [ "$MEMT" -lt 256 ] && LITE_DEF=1 || LITE_DEF=0
 [ -x /opt/bin/opkg ] && okm "Entware" || bad "Entware: —"
-FREE=$(df -m /opt 2>/dev/null | awk 'NR==2{print $4}')
-[ "${FREE:-0}" -ge 20 ] && okm "$(L 'Свободно на флешке' 'Free on USB'): ${FREE} $(L МБ MB)" || bad "$(L 'Свободно на флешке' 'Free on USB'): ${FREE:-?} $(L МБ MB) (< 20)"
+FREE=$(df -Pk /opt 2>/dev/null | awk 'NR > 1 {v = int($(NF-2)/1024)} END {print v}')   # -P: one line per disk
+if [ -z "$FREE" ]; then okm "$(L 'Свободно на флешке: не удалось узнать' 'Free on USB: unknown')"
+elif [ "$FREE" -ge 20 ]; then okm "$(L 'Свободно на флешке' 'Free on USB'): ${FREE} $(L МБ MB)"
+else bad "$(L 'Свободно на флешке' 'Free on USB'): ${FREE} $(L МБ MB) (< 20)"; fi
 # ISP: default route (Linux name) and its firmware name
 WAN=$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
 WAN_NDM=$(ndmc -c 'show ip route' 2>/dev/null | awk '$1=="0.0.0.0/0"{print $3; exit}')

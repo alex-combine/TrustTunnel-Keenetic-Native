@@ -599,11 +599,14 @@ cmd_reboot() {
     chk "init script supports attach mode"  'grep -q "^ensure_device()" "$INIT_SCRIPT"'
     chk "client config has use_existing"    'grep -q "^use_existing = true" "$CONFIG_FILE"'
     chk "VPN works now"                     'vpn_ok'
-    chk "classic backup is intact"          '[ -f "$BACKUP_DIR/MD5SUMS" ] && [ -f "$BACKUP_DIR/S99trusttunnel" ] && [ -f "$BACKUP_DIR/trusttunnel_client.toml" ]'
-    chk "boot guard is installed"           '[ -x "$GUARD_SCRIPT" ]'
+    if [ -x "$GUARD_SCRIPT" ]; then   # the switch from the classic mode is not confirmed yet: the way back must be ready
+        chk "classic backup is intact"      '[ -f "$BACKUP_DIR/MD5SUMS" ] && [ -f "$BACKUP_DIR/S99trusttunnel" ] && [ -f "$BACKUP_DIR/trusttunnel_client.toml" ]'
+    else
+        say "  skip classic backup (attach mode is confirmed or was set up by the installer)"
+    fi
     chk "KeeneticOS settings saved"         'ndmc -c "system configuration save" >/dev/null 2>&1'
     if [ "$bad" -ne 0 ]; then say "Pre-flight failed — NOT rebooting"; return 1; fi
-    say "All checks passed — rebooting the router in 5 s (the boot guard will verify the VPN)"
+    say "All checks passed — rebooting the router in 5 s$([ -x "$GUARD_SCRIPT" ] && echo ' (the boot guard will verify the VPN)')"
     sleep 5
     ndmc -c "system reboot" >/dev/null 2>&1
 }
@@ -617,6 +620,8 @@ cmd_guard() {
         else
             log "boot guard: VPN works, but KeeneticOS does not count the device yet ($(ndm_stat_line))"
         fi
+        # one-time check of the switch: later outages at boot must not undo attach mode
+        rm -f "$GUARD_SCRIPT"; log "boot guard: the switch is confirmed, guard removed"
         exit 0
     fi
     cmd_disable "after boot the VPN did not come up in attach mode within 4 minutes"

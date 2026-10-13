@@ -87,6 +87,11 @@ a service restart caused a second VPN restart, and the memory guard could run tw
   deleted the new guard's PID file; two guards restarted the client twice). Found on a live router.
 - Init script: the watchdog no longer dies when the SSH session that ran the installer or
   `S99trusttunnel restart` is closed (it ignores SIGHUP now). Found on a live router.
+- Boot guard is one-time: it checks the first reboot after `tt-stats enable` and removes itself once the VPN works,
+  so a later reboot during an internet or server outage no longer silently returns the router to the classic mode.
+- `tt-stats reboot` works after a fresh install (there is no classic backup to check); the installer says that the
+  dashboard statistics appear after one reboot.
+- Free space check: when `df` cannot tell (no data line), the installer and Razvilka no longer block with «0 MB».
 - WAN hook: a restart of the service (installer, `S99trusttunnel restart`) no longer triggers a second
   reload a few seconds later — the hook waits first, then checks how long ago the client started.
 

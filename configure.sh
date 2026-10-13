@@ -121,7 +121,7 @@ elif [ "$D_MODE" = "socks5" ]; then
     _c=$(curl -s -o /dev/null -w '%{http_code}' --socks5-hostname "$D_SOCKS" --max-time 6 http://connectivitycheck.gstatic.com/generate_204 2>/dev/null) || _c=""
 else _c=""; fi
 [ "$_c" = "204" ] && D_VPN=1
-D_FREE=$(df -Pk /opt 2>/dev/null | awk 'END {print int($(NF-2)/1024)}') || D_FREE=""
+D_FREE=$(df -Pk /opt 2>/dev/null | awk 'NR > 1 {v = int($(NF-2)/1024)} END {print v}') || D_FREE=""   # header only = unknown
 case "$D_FREE" in ''|*[!0-9]*) D_FREE=999 ;; esac   # unknown — do not block
 
 if [ -x "$D_INIT" ] && [ -n "$D_MODE" ] && [ -n "$D_HASCFG" ]; then
@@ -835,6 +835,9 @@ echo ""
 if [ -n "$VPN_OK" ]; then
     echo "✅ $(L 'TrustTunnel работает и запускается сам после перезагрузки роутера.' 'TrustTunnel works and starts by itself after a router reboot.')"
     [ "$TT_MODE" = "tun" ] && echo "   $(L 'Статистика в веб-панели и проверка' 'Dashboard statistics and a check'): tt-stats status"
+    if [ "$TT_MODE" = "tun" ] && ! /opt/bin/tt-stats status 2>/dev/null | grep -q 'statistics: *WORKING'; then
+        echo "   $(L 'Статистика в веб-панели появится после одной перезагрузки роутера' 'Dashboard statistics appear after one router reboot'): tt-stats reboot"
+    fi
     echo "   $(L 'Журнал' 'Log'): /opt/var/log/trusttunnel.log"
     echo "   $(L 'Если что-то не так — выключить VPN' 'If something is wrong — turn the VPN off'): /opt/etc/init.d/S99trusttunnel stop"
     [ -n "$RZV_DONE" ] && echo "   $(L 'Развилка: откройте своего бота в Telegram и нажмите /start' 'Razvilka: open your bot in Telegram and press /start')"

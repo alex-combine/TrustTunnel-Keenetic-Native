@@ -379,8 +379,8 @@ One reboot is needed because the classic script has deleted the firmware device;
 3. **New files are prepared before the service is touched:** the attach-capable scripts are downloaded and syntax-checked (`sh -n`).
 4. **Safety timer:** if the switch does not report success within 10 minutes, the classic setup is restored.
 5. **Verification:** the VPN must answer within 90 s, the client log must confirm the attach, then 3 checks over 60 s. Any failure → automatic rollback.
-6. **Boot guard** (`/opt/etc/init.d/S99ttstats-guard`): after a reboot, if the VPN does not come up within 4 minutes, the classic setup is restored.
-7. **`--reboot`** runs pre-flight checks (attach mode on, backup intact, boot guard installed, VPN works, settings saved) and only then reboots.
+6. **Boot guard** (`/opt/etc/init.d/S99ttstats-guard`): checks the first reboot after the switch. If the VPN does not come up within 4 minutes, the classic setup is restored; if it does, the switch is confirmed and the guard removes itself (later outages at boot do not undo attach mode).
+7. **`--reboot`** runs pre-flight checks (attach mode on, the classic backup intact while the switch is not confirmed yet, VPN works, settings saved) and only then reboots.
 
 Manual rollback at any time:
 
@@ -439,7 +439,7 @@ Prefer e-mail? On the GitHub page click **Watch → Custom → Releases**.
 - **My client is older than 1.0.62.** `tt-stats enable` refuses to switch. Update the client: run the installer, choose «2 — set up again» and answer «y» to the client question.
 - **SOCKS5 mode?** Attach mode applies to TUN mode only.
 - **MTU?** In attach mode the device MTU comes from `TUN_MTU` in `mode.conf`; `tt-stats enable` sets it from `mtu_size` of the client config and keeps `interface OpkgTunN ip mtu` equal to it.
-- **What if the VPN server itself is down right after a reboot?** The boot guard cannot tell a server outage from a failed switch, so it restores the classic setup to be safe. When the server is back, run `tt-stats enable --reboot` again.
+- **What if the VPN server itself is down at the first reboot after the switch?** The boot guard cannot tell a server outage from a failed switch, so it restores the classic setup to be safe. When the server is back, run `tt-stats enable --reboot` again. Later reboots are not checked: once confirmed, attach mode stays.
 - **How do I go back?** `tt-stats disable` (or restore the files from `/opt/trusttunnel_client/backup-classic/` by hand).
 
 ## Razvilka (beta): home country direct, everything else via VPN
