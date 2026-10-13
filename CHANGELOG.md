@@ -69,7 +69,7 @@ a connection watchdog, readable hints and many fixes from a live acceptance run.
   change rebuilds the current client config (no server file needed); a SOCKS5 config is no longer kept by
   mistake after choosing TUN. `install.sh --check` only reports; every step goes to `/opt/var/log/tt-install.log`.
 - **Installer safety after review:** an interrupted run (Ctrl+C, a dropped SSH session, an error) puts the
-  previous files back and starts the VPN again; scripts are replaced by rename, not overwritten in place; the
+  previous files back and starts the VPN again; on update the scripts are replaced by rename, not overwritten in place; the
   update menu has «3 — quit» and does nothing without a terminal; `tt-stats enable` survives a dropped SSH
   session; the SOCKS address is read from the client config; free space via `df -P`; a classic install with a
   client older than 1.0.62 is told to update the client instead of failing the switch; after a mode change the

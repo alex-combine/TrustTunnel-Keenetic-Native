@@ -29,20 +29,30 @@ restore_from() {  # $1 = backup dir
               mode.conf:/opt/trusttunnel_client/mode.conf; do
         if [ -f "$1/${_p%%:*}" ]; then cp -p "$1/${_p%%:*}" "${_p#*:}.rb" && mv "${_p#*:}.rb" "${_p#*:}"; fi
     done
+    # No client config in the backup but a new one was written: drop it and keep the VPN stopped
+    if [ -n "${NEW:-}" ] && [ ! -f "$1/trusttunnel_client.toml" ]; then
+        rm -f /opt/trusttunnel_client/trusttunnel_client.toml
+        return 0
+    fi
     /opt/etc/init.d/S99trusttunnel start >/dev/null 2>&1 || true
 }
 
 cleanup_on_error() {
     exit_code=$?
-    trap - EXIT INT TERM HUP
-    { jlog "END setup code=$exit_code"; } 2>/dev/null || true
+    set +e  # a dropped SSH session makes echo fail; the rollback must still run
+    trap - EXIT
+    trap '' INT TERM HUP  # a second Ctrl+C must not cut the rollback in half
+    [ -n "${TT_CHECK:-}" ] || { jlog "END setup code=$exit_code"; } 2>/dev/null
     [ "$exit_code" -eq 0 ] && return 0
+    [ -n "$RESTORE_BK" ] && restore_from "$RESTORE_BK"
     echo ""
     echo "!!! $(L 'Установка прервана' 'Installation aborted') ($(L 'код' 'code'): $exit_code) !!!"
     if [ -n "$RESTORE_BK" ]; then
-        restore_from "$RESTORE_BK"
-        echo "$(L 'Вернул прежние файлы из' 'Put the previous files back from') $RESTORE_BK $(L 'и снова запустил VPN.' 'and started the VPN again.')"
+        echo "$(L 'Вернул прежние файлы из' 'Put the previous files back from') $RESTORE_BK."
+        [ -n "$IFACE_REMOVED" ] && echo "$(L "Интерфейс $IFACE_REMOVED был удалён и сам не вернётся: запустите установщик ещё раз, выберите «2 — настроить заново» и прежний режим." "Interface $IFACE_REMOVED was removed and does not come back by itself: run the installer again, choose «2 — set up again» and the previous mode.")"
         echo "$(L 'Когда будете готовы — запустите установщик ещё раз.' 'Run the installer again when you are ready.')"
+    elif [ "${D_STATE:-}" != "fresh" ]; then
+        echo "$(L 'Ничего не удалял. Чтобы продолжить — запустите установщик ещё раз.' 'Nothing was removed. To continue, run the installer again.')"
     else
         echo "$(L 'Чтобы поставить заново, запустите скрипт ещё раз.' 'To reinstall, run the script again.')"
         echo "$(L 'Чтобы убрать вручную, удалите:' 'To clean up manually, delete:')"
@@ -738,7 +748,8 @@ else
             fi
             if [ -n "$RESTORE_BK" ]; then
                 restore_from "$RESTORE_BK"
-                echo "   $(L 'Вернул прежние файлы (службу, настройки, mode.conf) из' 'Put the previous files (service, config, mode.conf) back from') $RESTORE_BK"
+                echo "   $(L 'Вернул прежние файлы из' 'Put the previous files back from') $RESTORE_BK"
+                [ -n "$NEW" ] && [ ! -f "$RESTORE_BK/trusttunnel_client.toml" ] && echo "   $(L 'Прежнего файла настроек не было — новый убран, VPN остановлен, чтобы не мешать интернету.' 'There was no previous client config — the new one is removed and the VPN is stopped so it does not get in the way of the internet.')"
                 RESTORE_BK=""
                 [ -n "$IFACE_REMOVED" ] && echo "   $(L "Интерфейс $IFACE_REMOVED был удалён и сам не вернётся: запустите установщик ещё раз, выберите «2 — настроить заново» и прежний режим." "Interface $IFACE_REMOVED was removed and does not come back by itself: run the installer again, choose «2 — set up again» and the previous mode.")"
             elif [ -n "$NEW" ]; then
