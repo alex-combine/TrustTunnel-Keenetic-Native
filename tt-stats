@@ -401,7 +401,7 @@ cmd_memguard_run() {
                 touch "$MEMGUARD_PAUSE"; "$MG_TARGET" stop >/dev/null 2>&1
                 ( sleep 900; rm -f "$MEMGUARD_PAUSE"; "$MG_TARGET" start >/dev/null 2>&1 ) </dev/null >/dev/null 2>&1 &
             elif [ "$recent" -ge 3 ]; then
-                mlog "not restarting: free ${a} kB is above the critical ${MEMGUARD_CRIT_KB} kB, client ${r:-?} kB, ${recent} times in 10 minutes - the client is not the cause"
+                mlog "not restarting again: ${recent} low-memory readings in 10 minutes, restarting does not help; the VPN is paused only below ${MEMGUARD_CRIT_KB} kB (free ${a} kB, client ${r:-?} kB)"
             elif [ -z "$r" ]; then
                 mlog "not restarting: the client is not running right now (free ${a} kB)"
             elif [ "$r" -lt "$MEMGUARD_SMALL_KB" ]; then

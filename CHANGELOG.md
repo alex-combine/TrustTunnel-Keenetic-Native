@@ -92,6 +92,8 @@ a service restart caused a second VPN restart, and the memory guard could run tw
 - `tt-stats reboot` works after a fresh install (there is no classic backup to check); the installer says that the
   dashboard statistics appear after one reboot.
 - Free space check: when `df` cannot tell (no data line), the installer and Razvilka no longer block with «0 MB».
+- Memory guard log: when it stops restarting a client that keeps growing, it now says that restarting does not help
+  (it used to say «the client is not the cause» next to a 18 MB client).
 - WAN hook: a restart of the service (installer, `S99trusttunnel restart`) no longer triggers a second
   reload a few seconds later — the hook waits first, then checks how long ago the client started.
 
