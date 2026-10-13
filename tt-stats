@@ -17,7 +17,7 @@
 #   guard              boot check (called by /opt/etc/init.d/S99ttstats-guard)
 #   memguard on [KB]|off|status
 #                      memory guard for 128 MB routers: restart the client when free
-#                      memory drops below KB (default 10000) instead of letting the router hang;
+#                      memory drops below KB (default 15000) instead of letting the router hang;
 #                      a small client is left alone, the VPN pauses only if memory stays critical,
 #                      and a bloated client is restarted once a night (/opt/etc/cron.daily);
 #                      overload brake: low memory and a high load for 2 minutes -> stop heavy optional
@@ -27,7 +27,7 @@
 #
 # Log: /opt/var/log/tt-stats.log, memory guard: /opt/var/log/tt-memguard.log
 
-TTS_VERSION="2.3.3"
+TTS_VERSION="2.3.4"
 SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 TTS_REPO_URL="${TTS_REPO_URL:-https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download}"
 
@@ -70,7 +70,7 @@ HC_TARGET_URL="http://connectivitycheck.gstatic.com/generate_204"
 # shellcheck source=/dev/null
 [ -f "$MODE_CONF" ] && . "$MODE_CONF"
 TUN_IDX="${TUN_IDX:-0}"
-MEMGUARD_LOW_KB="${MEMGUARD_LOW_KB:-10000}"
+MEMGUARD_LOW_KB="${MEMGUARD_LOW_KB:-15000}"
 MEMGUARD_CRIT_KB="${MEMGUARD_CRIT_KB:-$((MEMGUARD_LOW_KB * 2 / 3))}"   # pause the VPN only below this
 MEMGUARD_SMALL_KB="${MEMGUARD_SMALL_KB:-5000}"   # client smaller than this: memory is eaten by something else
 MEMGUARD_NIGHT_KB="${MEMGUARD_NIGHT_KB:-12000}"  # nightly restart if the client is bigger (0 = off)
@@ -430,7 +430,7 @@ cmd_memguard() {  # $1 = on|off|status, $2 = threshold kB (optional, with on)
         on)
             [ -n "$(mem_avail)" ] || die "this firmware does not report MemAvailable in /proc/meminfo"
             if [ -n "$2" ]; then
-                case "$2" in *[!0-9]*) die "threshold must be a number of kB, e.g. 10000" ;; esac
+                case "$2" in *[!0-9]*) die "threshold must be a number of kB, e.g. 15000" ;; esac
                 mode_conf_set MEMGUARD_LOW_KB "$2"; MEMGUARD_LOW_KB="$2"
             fi
             mkdir -p "$(dirname "$MEMGUARD_INIT")" "$(dirname "$MEMGUARD_PID")"

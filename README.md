@@ -173,7 +173,7 @@ The installer first asks for the language — Russian or English (or pass `--lan
 > The script automatically detects the latest stable version (GitHub Release).
 > To install a specific version:
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --version v2.3.3
+> curl -fsSL https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --version v2.3.4
 > ```
 
 > To install from the `main` branch (latest dev version):
@@ -409,8 +409,8 @@ Put `killswitch_enabled = true` at the top of `trusttunnel_client.toml`. With `f
 On routers with 128 MB of RAM a long fast download through the tunnel can exhaust memory, and the router hangs (see [troubleshooting](#the-router-hangs-or-reboots-during-big-downloads-through-the-vpn)). The memory guard prevents that:
 
 ```bash
-tt-stats memguard on          # enable (threshold 10000 kB of free memory)
-tt-stats memguard on 15000    # enable with your own threshold, kB
+tt-stats memguard on          # enable (threshold 15000 kB of free memory)
+tt-stats memguard on 20000    # enable with your own threshold, kB
 tt-stats memguard             # state, free memory, last events
 tt-stats memguard off         # disable
 ```
@@ -493,7 +493,7 @@ The installer offers it at the very end, once the VPN works; or see [razvilka/RE
 If you prefer manual installation instead of the script. These are only the service scripts: the client, `mode.conf`, the interface and the client config are as in the sections above. These commands also download from GitHub; if GitHub cannot be reached from the router, download the files on a computer and replace `curl … -o` with copying from `/opt/tmp/`.
 
 ```bash
-VERSION="v2.3.3"  # Specify the required version (GitHub Release tag)
+VERSION="v2.3.4"  # Specify the required version (GitHub Release tag)
 
 # Create directories
 mkdir -p /opt/etc/init.d

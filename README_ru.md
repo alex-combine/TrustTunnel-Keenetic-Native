@@ -173,7 +173,7 @@ curl -fsSL https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/
 > Скрипт автоматически определяет последнюю стабильную версию (GitHub Release).
 > Для установки конкретной версии:
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --version v2.3.3
+> curl -fsSL https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --version v2.3.4
 > ```
 
 > Для установки из ветки `main` (последняя dev-версия):
@@ -409,8 +409,8 @@ tt-stats disable
 На роутерах со 128 МБ памяти долгая быстрая загрузка через туннель может съесть всю память, и роутер зависает (см. [раздел про зависания](#роутер-зависает-или-перезагружается-во-время-больших-загрузок-через-vpn)). Защита памяти этого не допускает:
 
 ```bash
-tt-stats memguard on          # включить (порог — 10000 кБ свободной памяти)
-tt-stats memguard on 15000    # включить со своим порогом, кБ
+tt-stats memguard on          # включить (порог — 15000 кБ свободной памяти)
+tt-stats memguard on 20000    # включить со своим порогом, кБ
 tt-stats memguard             # состояние, свободная память, последние события
 tt-stats memguard off         # выключить
 ```
@@ -493,7 +493,7 @@ tt-stats memguard off         # выключить
 Если вы предпочитаете ручную установку вместо скрипта. Здесь только служебные скрипты: клиент, `mode.conf`, интерфейс и настройки клиента — как в разделах выше. Команды ниже тоже скачивают файлы с GitHub; если GitHub с роутера недоступен, скачайте файлы на компьютере и замените `curl … -o` на копирование из `/opt/tmp/`.
 
 ```bash
-VERSION="v2.3.3"  # Укажите нужную версию (тег GitHub Release)
+VERSION="v2.3.4"  # Укажите нужную версию (тег GitHub Release)
 
 # Создаём директории
 mkdir -p /opt/etc/init.d

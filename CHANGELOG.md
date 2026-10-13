@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.3.4 — memory guard: default threshold 15000 kB
+
+- `tt-stats memguard on` without a number now uses **15000 kB** instead of 10000 kB. On a 128 MB router
+  the night hang happened at about 14 MB free with a load of 65: with 10000 kB the overload brake would
+  not have fired. Now the client restart, the overload brake and the VPN pause (2/3 of the threshold,
+  10000 kB) start one step earlier.
+- If you set your own threshold (`tt-stats memguard on 12000`), it stays as it is. If you enabled the guard
+  without a number, the new default applies after the update.
+
 ## v2.3.3 — one installer from zero to a working VPN, update from any version; Razvilka: self-healing and a watchdog
 
 The short version: `install.sh` now speaks Russian and English, sets the client up from the server file by itself,
