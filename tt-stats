@@ -372,7 +372,8 @@ mg_stop() {
 
 cmd_memguard_run() {
     echo $$ > "$MEMGUARD_PID"
-    trap 'rm -f "$MEMGUARD_PID"; exit 0' TERM INT
+    # The trap runs only after the current sleep; by then a new guard may own the PID file
+    trap '[ "$(cat "$MEMGUARD_PID" 2>/dev/null)" = "$$" ] && rm -f "$MEMGUARD_PID"; exit 0' TERM INT
     mlog "started: threshold ${MEMGUARD_LOW_KB} kB, now free $(mem_avail) kB"
     [ -f "$MEMGUARD_UDPT" ] && { cat "$MEMGUARD_UDPT" > "$UDP_TIMEOUT_FILE"; rm -f "$MEMGUARD_UDPT"; }   # restore after a crash
     hot=0; braked=0

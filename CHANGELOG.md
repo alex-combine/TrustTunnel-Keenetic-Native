@@ -78,6 +78,8 @@ a connection watchdog, readable hints and many fixes from a live acceptance run.
   TrustTunnel in TUN attach mode — the only tested setup. An installed Razvilka keeps working; to update it,
   move to TrustTunnel or keep the current version.
 - Razvilka installer: the «light map» is suggested below 256 MB of RAM (as the text says), not below 200 MB.
+- Memory guard: turning it on twice in a row no longer leaves two guards running (the old guard, stopping late,
+  deleted the new guard's PID file; two guards restarted the client twice). Found on a live router.
 
 ## v2.3.2 — the router does not choke when the VPN drops at night
 
