@@ -19,12 +19,14 @@ NDMC_IFACE="OpkgTun${TUN_IDX}"
 
 # Skip reload when triggered by our own TUN interface
 # (prevents infinite restart loop when OpkgTun is a default gateway)
-if [ "$1" = "$NDMC_IFACE" ]; then
+# (KeeneticOS passes start|stop in $1 and the interface in the environment)
+if [ "$1" = "$NDMC_IFACE" ] || [ "${interface:-}" = "$NDMC_IFACE" ] || [ "${system_name:-}" = "$OPKG_IFACE" ]; then
     logger -t "$LOG_TAG" "WAN event for own TUN interface ($1), skipping"
     exit 0
 fi
 
 # Wait first: an event fired while the service restarts itself must see the new start time
+EVENT_TS=$(date +%s)
 sleep 5
 
 # Skip reload if client was started recently (prevents restart during startup)
@@ -57,11 +59,24 @@ fi
 # passing data (a real day: the backup 4G modem reconnected and the VPN was cut for 11 s for nothing).
 HC_TARGET_URL="${HC_TARGET_URL:-http://connectivitycheck.gstatic.com/generate_204}"
 HC_SOCKS5_PROXY="${HC_SOCKS5_PROXY:-127.0.0.1:1080}"
-if [ "$TT_MODE" = "tun" ]; then
-    curl --interface "$OPKG_IFACE" --connect-timeout 5 --max-time 10 -s -o /dev/null "$HC_TARGET_URL" >/dev/null 2>&1
-else
-    curl --socks5 "$HC_SOCKS5_PROXY" --connect-timeout 5 --max-time 10 -s -o /dev/null "$HC_TARGET_URL" >/dev/null 2>&1
-fi && { logger -t "$LOG_TAG" "WAN event (${1:-?}): the VPN still passes data, no reload needed"; exit 0; }
+vpn_passes() {
+    if [ "$TT_MODE" = "tun" ]; then
+        curl --interface "$OPKG_IFACE" --connect-timeout 5 --max-time 10 -s -o /dev/null "$HC_TARGET_URL" >/dev/null 2>&1
+    else
+        curl --socks5 "$HC_SOCKS5_PROXY" --connect-timeout 5 --max-time 10 -s -o /dev/null "$HC_TARGET_URL" >/dev/null 2>&1
+    fi
+}
+vpn_passes && { logger -t "$LOG_TAG" "WAN event (${1:-?}): the VPN still passes data, no reload needed"; exit 0; }
+# A tunnel that is being (re)started needs ~20 s to connect, and the watchdog restarts a killed client
+# within ~10 s: a reload now would kill it again (a real day: 5 minutes of restarts in a loop). Wait,
+# then reload only if nobody restarted the client meanwhile and the VPN still does not pass data.
+sleep 30
+start_ts=$(cat "$START_TS_FILE" 2>/dev/null)
+if [ -n "$start_ts" ] && [ "$start_ts" -ge "$EVENT_TS" ] 2>/dev/null; then
+    logger -t "$LOG_TAG" "WAN event (${1:-?}): the client was restarted meanwhile, no reload needed"
+    exit 0
+fi
+vpn_passes && { logger -t "$LOG_TAG" "WAN event (${1:-?}): the VPN passes data again, no reload needed"; exit 0; }
 
 logger -t "$LOG_TAG" "WAN interface up (${1:-?}), the VPN does not pass data - reloading TrustTunnel..."
 

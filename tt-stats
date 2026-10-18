@@ -78,7 +78,7 @@ MEMGUARD_NIGHT_KB="${MEMGUARD_NIGHT_KB:-12000}"  # nightly restart if the client
 MEMGUARD_LOAD="${MEMGUARD_LOAD:-20}"             # overload brake: load average at or above this (0 = off)
 MEMGUARD_SHED="${MEMGUARD_SHED:-geo-build.sh}"   # heavy optional jobs to stop under overload
 MEMGUARD_BOX_LOAD="${MEMGUARD_BOX_LOAD:-8}"     # black box: a snapshot a minute from this load (0 = off)
-MEMGUARD_BLOAT_KB="${MEMGUARD_BLOAT_KB:-20000}"  # restart a client that grew past this (RAM + swap) without waiting for low memory (0 = off)
+MEMGUARD_BLOAT_KB="${MEMGUARD_BLOAT_KB:-25000}"  # restart a client that grew past this (RAM + swap) without waiting for low memory (0 = off)
 MEMGUARD_BLOAT_GAP="${MEMGUARD_BLOAT_GAP:-1800}" # ...but not more often than once per this many seconds
 MEMGUARD_SWAPPINESS="${MEMGUARD_SWAPPINESS:-10}" # how eagerly the kernel pushes memory to swap (it is only ever lowered; 0 = leave as is)
 SWAPPINESS_FILE="${SWAPPINESS_FILE:-/proc/sys/vm/swappiness}"
@@ -447,7 +447,7 @@ cmd_memguard_run() {
     trap '[ "$(cat "$MEMGUARD_PID" 2>/dev/null)" = "$$" ] && rm -f "$MEMGUARD_PID"; exit 0' TERM INT
     mlog "started: threshold ${MEMGUARD_LOW_KB} kB, now free $(mem_avail) kB"
     [ -f "$MEMGUARD_UDPT" ] && { cat "$MEMGUARD_UDPT" > "$UDP_TIMEOUT_FILE"; rm -f "$MEMGUARD_UDPT"; }   # restore after a crash
-    hot=0; braked=0; boxed=0; bchk=0; bloated=0
+    hot=0; braked=0; boxed=0; bchk=0; bloated=0; dchk=0
     # Less swapping: under zram a swapped page still costs RAM and CPU; only ever lower the value
     if [ "$MEMGUARD_SWAPPINESS" -gt 0 ] 2>/dev/null && [ -w "$SWAPPINESS_FILE" ]; then
         s=$(cat "$SWAPPINESS_FILE" 2>/dev/null)
@@ -507,6 +507,18 @@ cmd_memguard_run() {
                 if [ -n "$r" ] && [ "$r" -gt "$MEMGUARD_BLOAT_KB" ] && [ $((now - bloated)) -ge "$MEMGUARD_BLOAT_GAP" ]; then
                     mlog "restarting the client early: it grew to ${r} kB (RAM + swap), limit ${MEMGUARD_BLOAT_KB} kB, free $(mem_avail) kB"
                     "$MG_TARGET" reload >/dev/null 2>&1; bloated=$now
+                fi
+            fi
+        fi
+        # The firmware sometimes rebuilds the filter table without the netfilter.d hook putting the
+        # DNS limit back (a real reboot left the router without it): check once a minute
+        if [ "$DNSLIM_MAX" -gt 0 ] 2>/dev/null; then
+            now=$(date +%s)
+            if [ $((now - dchk)) -ge 60 ]; then
+                dchk=$now
+                if command -v iptables >/dev/null 2>&1 && ! iptables -w -C INPUT $(dnslim_rules iptables) 2>/dev/null; then
+                    dnslim_apply
+                    iptables -w -C INPUT $(dnslim_rules iptables) 2>/dev/null && mlog "DNS limit was missing from the firewall - put it back"
                 fi
             fi
         fi
