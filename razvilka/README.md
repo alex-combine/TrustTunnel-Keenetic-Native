@@ -51,6 +51,8 @@ By hand:
 
 Before any change the installer backs up router settings to `/opt/backup/razvilka_<time>/` and records every step. If the VPN does not respond after installing, it **restores everything automatically**. If Razvilka is already installed, it **updates the files** and keeps your settings, lists and token.
 
+If you already have your own lists of direct sites (a site group in the router with a DNS route through the ISP), the installer shows them and offers to merge them into the Razvilka list: they keep going direct, and the bot shows them in «My exceptions». The old lists are removed, their copy stays in the backup folder, and `--uninstall` brings them back. Lists with excludes are left as they are.
+
 The installer and the bot speak English and Russian. To switch the bot later: edit `BOTLANG=en` (or `ru`) in `/opt/etc/razvilka/net.conf` and run `/opt/etc/init.d/S99razvilka restart`.
 
 ## Remove

@@ -47,6 +47,11 @@ storm of 1000 DNS requests from one device.
 
 ### Razvilka
 
+- **Own lists of direct sites are merged.** If the router already has its own site groups with a DNS route
+  through the ISP (a real router had four such lists, and the bot showed none of them), the installer lists them
+  and offers to merge them into the Razvilka list: the sites keep going direct and the bot shows them. The old
+  lists are removed, their copy is kept in the backup folder, and `--uninstall` brings them back. Lists with
+  excludes are left as they are.
 - «My exceptions» knows three more services and shows them as one line each, removable with one tap: Windows
   Update (Microsoft update downloads), Steam downloads and Phone Link (Windows). Heavy downloads through the VPN
   load a weak router the most; these go direct.

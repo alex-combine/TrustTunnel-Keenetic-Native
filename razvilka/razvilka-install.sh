@@ -12,7 +12,7 @@
 # Rules: 1) look first; 2) do not touch what is not ours; 3) before changes — a settings backup and a list of what was done
 # (manifest) for rollback; 4) after install check the VPN — no answer → roll everything back; 5) show the plan, ask "yes".
 export PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
-VERSION=0.8
+VERSION=0.9
 HERE=$(cd "$(dirname "$0")" && pwd); FILES=$HERE/razvilka-files
 TS=$(date +%Y%m%d_%H%M%S 2>/dev/null)
 DEMO=0; YES=0; LNG=""; MODE=install; R=""
@@ -66,6 +66,10 @@ if [ $MODE = uninstall ]; then
     ndm)   case "$a" in group) sys "ndmc -c 'no dns-proxy route object-group $GROUP $b'"; sys "ndmc -c 'no object-group fqdn $GROUP'";;
            esac; sys "ndmc -c 'system configuration save'"; echo "  ⚙️ $(L 'настройки прошивки: группа' 'firmware: group') $GROUP";;
     routes) sys "$b off";;
+    merged) sys "ndmc -c 'object-group fqdn $a' >/dev/null"                   # a merged own list — back as it was
+           while read -r d; do sys "ndmc -c 'object-group fqdn $a include $d' >/dev/null"; sys "ndmc -c 'no object-group fqdn $GROUP include $d' >/dev/null"; done < "$R$c"
+           sys "ndmc -c 'dns-proxy route object-group $a $b' >/dev/null"; sys "ndmc -c 'system configuration save' >/dev/null"
+           echo "  ↩️ $(L 'список' 'list') «$a»";;
   esac; done
   ask "$(L 'Удалить и настройки Развилки (токен, списки)? (да/нет)' 'Also delete Razvilka settings (token, lists)? (yes/no)')" "$(L нет no)"
   is_yes "$ANS" && { rm -rf "$R$ETC"; echo "  🗑 $ETC"; } || { mv "$R$MAN" "$R$MAN.removed_$TS"; echo "  $(L 'Настройки оставил в' 'Settings kept in') $ETC"; }
@@ -181,6 +185,24 @@ for p in /opt/etc/AdGuardHome:AdGuardHome /opt/etc/smartdns:smartdns /opt/etc/xr
 done
 GRP_EXISTS=0; [ -z "$R" ] && ndmc -c 'show running-config' 2>/dev/null | grep -q "^object-group fqdn $GROUP\$" && GRP_EXISTS=1
 [ $GRP_EXISTS = 1 ] && okm "$(L 'Группа сайтов' 'Site group') $GROUP $(L 'уже есть в прошивке' 'already exists in firmware')"
+# Own lists of direct sites (object-group fqdn with a DNS route through the ISP): they keep working,
+# but the bot shows and edits only $GROUP — offer to merge them (a real router had four such lists)
+RCF=/tmp/razvilka-rc.$$
+if [ -z "$R" ]; then ndmc -c 'show running-config' > $RCF 2>/dev/null; else cp "$R/tmp/running-config.txt" $RCF 2>/dev/null || : > $RCF; fi
+OTHER=$(awk -v g="$GROUP" -v w="$WAN_NDM" '
+  /^object-group fqdn / {cur = $3; next}
+  /^[^ ]/ {cur = ""; dp = ($1 == "dns-proxy")}
+  cur != "" && $1 == "include" {n[cur]++}
+  cur != "" && $1 == "exclude" {x[cur] = 1}
+  dp && $1 == "route" && $2 == "object-group" && $4 == w && $3 != g {r[$3] = 1}
+  END {for (k in r) if (n[k] > 0) print k, n[k], x[k] + 0}' $RCF)
+MLIST=$(echo "$OTHER" | awk 'NF && $3 == 0 {printf "%s ", $1}'); MLIST=${MLIST% }
+if [ -n "$OTHER" ]; then
+  echo "$OTHER" | while read -r g n x; do
+    [ -n "$g" ] && wrn "$(L 'Свой список прямых сайтов' 'Own list of direct sites') «$g»: $n$([ "$x" = 1 ] && echo " — $(L 'есть исключения (exclude), не трогаю' 'has excludes, left as is')")"
+  done
+  echo "     $(L 'Они работают, но бот Развилки видит и правит только свой список.' 'They work, but the Razvilka bot sees and edits only its own list.')"
+fi
 USED_T=$(ip rule 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="lookup") print $(i+1)}' | sort -u | tr '\n' ' ')
 TABLE=$(sed -n "s/^$GROUP[[:space:]]\{1,\}\([0-9]\{1,\}\).*/\1/p" "$R/opt/etc/direct-routes.conf" 2>/dev/null | head -1)
 [ -z "$TABLE" ] && { TABLE=1998; while echo " $USED_T " | grep -q " $TABLE "; do TABLE=$((TABLE+1)); done; }
@@ -201,6 +223,11 @@ LITE=0
 if [ $SELF = 0 ]; then   # on update the map is not touched — it is already set up
   echo "  $(L 'Для умеренных роутеров (до 256 МБ) советую лёгкую карту: только крупные блоки страны.' 'For modest routers (up to 256 MB) I suggest the light map: only large country blocks.')"
   ask "$(L 'Лёгкая карта? (да/нет)' 'Light map? (yes/no)')" "$([ $LITE_DEF = 1 ] && yes_word || L нет no)"; is_yes "$ANS" && LITE=1
+fi
+MERGE=0
+if [ -n "$MLIST" ]; then
+  ask "$(L "Слить списки ($MLIST) в список Развилки, чтобы бот их показывал? Старые удалю, копия останется (да/нет)" "Merge the lists ($MLIST) into the Razvilka list so the bot shows them? The old ones are removed, a copy is kept (yes/no)")" "$(yes_word)"
+  is_yes "$ANS" && MERGE=1
 fi
 TOKEN=""; ADMIN=""
 if [ $SELF = 1 ] && [ -s "$R$ETC/tg.env" ]; then okm "$(L 'Токен бота уже есть — оставляю' 'Bot token already set — keeping it')"
@@ -236,6 +263,7 @@ echo "  ⚙️ $(L 'Служба' 'Service'): /opt/etc/init.d/S99razvilka"
 [ $SELF = 0 ] && echo "  🗺 net.conf: WAN=$WAN TUN=$VPNIF LANIP=$LANIP; $(L 'страна' 'country') $COUNTRY$([ $LITE = 1 ] && echo ", $(L 'лёгкая карта' 'light map')")"
 [ $SELF = 0 ] && echo "  🛣 $(L 'Своя таблица маршрутов' 'Own routing table') №$TABLE, $(L 'устройства с VPN-политикой' 'devices with a VPN policy') (@policy)"
 [ $GRP_EXISTS = 0 ] && echo "  🔧 $(L 'Прошивка: группа сайтов' 'Firmware: site group') $GROUP + DNS-$(L 'маршрут через' 'route via') $WAN_NDM"
+[ $MERGE = 1 ] && echo "  🔀 $(L 'Слить списки' 'Merge lists') $MLIST → $GROUP ($(L 'старые удалить, копия в' 'remove the old ones, copy in') $BK)"
 echo "  ⏰ $(L 'Расписание (cron), строки с пометкой «# razvilka»' 'Cron lines marked «# razvilka»')"
 echo "  🙅 $(L 'Не трону: чужие правила, ваши настройки DNS, другие программы' 'Won'"'"'t touch: other rules, your DNS settings, other programs')"
 echo "  ↩️  $(L 'Вернуть всё как было' 'Undo everything'): sh $0 --uninstall"
@@ -330,6 +358,23 @@ if [ $GRP_EXISTS = 0 ]; then
   sys "ndmc -c 'system configuration save' >/dev/null"; note "ndm group $WAN_NDM"
   okm "$(L 'Прошивка: группа' 'Firmware: group') $GROUP"
 fi
+
+# 5.4b merge own lists of direct sites into $GROUP (the bot then shows them; --uninstall brings them back)
+if [ $MERGE = 1 ]; then
+  for g in $MLIST; do
+    awk -v g="$g" '/^object-group fqdn / {cur = $3; next} /^[^ ]/ {cur = ""} cur == g && $1 == "include" {print $2}' $RCF > "$R$BK/merged_$g.txt"
+    while read -r d; do
+      sys "ndmc -c 'object-group fqdn $GROUP include $d' >/dev/null"
+      grep -qxF "$d" "$R$ETC/sites" 2>/dev/null || echo "$d" >> "$R$ETC/sites"
+    done < "$R$BK/merged_$g.txt"
+    sys "ndmc -c 'no dns-proxy route object-group $g $WAN_NDM' >/dev/null"
+    sys "ndmc -c 'no object-group fqdn $g' >/dev/null"
+    note "merged $g $WAN_NDM $BK/merged_$g.txt"
+    okm "$(L 'Список' 'List') «$g» → $GROUP: $(wc -l < "$R$BK/merged_$g.txt")"
+  done
+  sys "ndmc -c 'system configuration save' >/dev/null"
+fi
+rm -f $RCF
 
 # 5.5 hooks and schedule
 if [ ! -f "$R/opt/etc/ndm/netfilter.d/56-direct-routes.sh" ]; then
