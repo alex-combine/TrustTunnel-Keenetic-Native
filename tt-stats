@@ -78,6 +78,13 @@ MEMGUARD_NIGHT_KB="${MEMGUARD_NIGHT_KB:-12000}"  # nightly restart if the client
 MEMGUARD_LOAD="${MEMGUARD_LOAD:-20}"             # overload brake: load average at or above this (0 = off)
 MEMGUARD_SHED="${MEMGUARD_SHED:-geo-build.sh}"   # heavy optional jobs to stop under overload
 MEMGUARD_BOX_LOAD="${MEMGUARD_BOX_LOAD:-8}"     # black box: a snapshot a minute from this load (0 = off)
+MEMGUARD_BLOAT_KB="${MEMGUARD_BLOAT_KB:-20000}"  # restart a client that grew past this (RAM + swap) without waiting for low memory (0 = off)
+MEMGUARD_BLOAT_GAP="${MEMGUARD_BLOAT_GAP:-1800}" # ...but not more often than once per this many seconds
+MEMGUARD_SWAPPINESS="${MEMGUARD_SWAPPINESS:-10}" # how eagerly the kernel pushes memory to swap (it is only ever lowered; 0 = leave as is)
+SWAPPINESS_FILE="${SWAPPINESS_FILE:-/proc/sys/vm/swappiness}"
+DNSLIM_MAX="${DNSLIM_MAX:-120}"                  # DNS requests one device may have open at the router (they live ~30 s; normal is 5-40, a storm 200-300; 0 = off)
+DNSLIM_HOOK="${DNSLIM_HOOK:-/opt/etc/ndm/netfilter.d/58-tt-dnslimit.sh}"
+DNSLIM_IF="${DNSLIM_IF:-br+}"                    # LAN bridges
 OPKG_IFACE="opkgtun${TUN_IDX}"
 NDM_IFACE="OpkgTun${TUN_IDX}"
 
@@ -398,6 +405,24 @@ mg_blackbox() {  # $1 = free kB, $2 = load, $3 = note
 
 # The PID file survives a crash on the USB drive; after a reboot that PID may belong to another
 # process, so check the command line, not just that the PID exists.
+dnslim_rules() {  # $1 = iptables|ip6tables → the rule text. Old firmware has connlimit, but no hashlimit in its iptables
+    [ "$1" = ip6tables ] && m=128 || m=32
+    echo "-i $DNSLIM_IF -p udp --dport 53 -m connlimit --connlimit-above $DNSLIM_MAX --connlimit-mask $m -j DROP"
+}
+dnslim_remove() {  # takes our rules out whatever limit they were made with
+    for T in iptables ip6tables; do
+        command -v $T >/dev/null 2>&1 || continue
+        $T -w -S INPUT 2>/dev/null | grep -- '--dport 53 -m connlimit' | sed 's/^-A /-D /' | while read -r r; do eval "$T -w $r" 2>/dev/null; done
+    done
+}
+dnslim_apply() {  # silent drop of a device's DNS requests beyond DNSLIM_MAX open ones: a DNS storm cannot eat the router any more
+    [ "$DNSLIM_MAX" -gt 0 ] 2>/dev/null || return 0
+    for T in iptables ip6tables; do
+        command -v $T >/dev/null 2>&1 || continue
+        r=$(dnslim_rules $T)
+        $T -w -C INPUT $r 2>/dev/null || $T -w -I INPUT 1 $r 2>/dev/null
+    done
+}
 mg_running() { p=$(cat "$MEMGUARD_PID" 2>/dev/null); [ -n "$p" ] && grep -q memguard-run "/proc/$p/cmdline" 2>/dev/null; }
 mlog() { mkdir -p "$(dirname "$MEMGUARD_LOG")"; echo "$(ts) $*" >> "$MEMGUARD_LOG"; logger -t tt-memguard "$*" 2>/dev/null; }
 
@@ -422,7 +447,13 @@ cmd_memguard_run() {
     trap '[ "$(cat "$MEMGUARD_PID" 2>/dev/null)" = "$$" ] && rm -f "$MEMGUARD_PID"; exit 0' TERM INT
     mlog "started: threshold ${MEMGUARD_LOW_KB} kB, now free $(mem_avail) kB"
     [ -f "$MEMGUARD_UDPT" ] && { cat "$MEMGUARD_UDPT" > "$UDP_TIMEOUT_FILE"; rm -f "$MEMGUARD_UDPT"; }   # restore after a crash
-    hot=0; braked=0; boxed=0
+    hot=0; braked=0; boxed=0; bchk=0; bloated=0
+    # Less swapping: under zram a swapped page still costs RAM and CPU; only ever lower the value
+    if [ "$MEMGUARD_SWAPPINESS" -gt 0 ] 2>/dev/null && [ -w "$SWAPPINESS_FILE" ]; then
+        s=$(cat "$SWAPPINESS_FILE" 2>/dev/null)
+        [ "${s:-0}" -gt "$MEMGUARD_SWAPPINESS" ] && echo "$MEMGUARD_SWAPPINESS" > "$SWAPPINESS_FILE" && mlog "swappiness $s -> $MEMGUARD_SWAPPINESS"
+    fi
+    dnslim_apply
     while true; do
         a=$(mem_avail)
         if [ "$MEMGUARD_BOX_LOAD" -gt 0 ] 2>/dev/null; then
@@ -467,6 +498,18 @@ cmd_memguard_run() {
             fi
             sleep 60
         fi
+        # A client that has grown a lot is restarted early, while there is still memory: 27 MB of it
+        # (mostly in swap) was what pulled the router down on the evening of 14.10
+        if [ "$MEMGUARD_BLOAT_KB" -gt 0 ] 2>/dev/null && [ ! -f "$MEMGUARD_PAUSE" ]; then
+            now=$(date +%s)
+            if [ $((now - bchk)) -ge 30 ]; then
+                bchk=$now; r=$(client_rss)
+                if [ -n "$r" ] && [ "$r" -gt "$MEMGUARD_BLOAT_KB" ] && [ $((now - bloated)) -ge "$MEMGUARD_BLOAT_GAP" ]; then
+                    mlog "restarting the client early: it grew to ${r} kB (RAM + swap), limit ${MEMGUARD_BLOAT_KB} kB, free $(mem_avail) kB"
+                    "$MG_TARGET" reload >/dev/null 2>&1; bloated=$now
+                fi
+            fi
+        fi
         sleep 5
     done
 }
@@ -509,18 +552,29 @@ $SELF memguard-nightly </dev/null >/dev/null 2>&1
 EOF
                 chmod +x "$MEMGUARD_CRON"
             fi
+            # The firmware rebuilds the filter table now and then: the hook puts the DNS limit back each time
+            if [ "$DNSLIM_MAX" -gt 0 ] 2>/dev/null && [ -d "$(dirname "$DNSLIM_HOOK")" ]; then
+                printf '#!/bin/sh\n# tt-stats: DNS limit per device (DNSLIM_MAX in mode.conf, 0 = off). Managed by: tt-stats memguard on|off\n[ "$table" = filter ] && %s dnslimit-apply >/dev/null 2>&1\nexit 0\n' "$SELF" > "$DNSLIM_HOOK"
+                chmod +x "$DNSLIM_HOOK"
+            else
+                rm -f "$DNSLIM_HOOK"
+            fi
+            dnslim_remove   # the guard puts the rules back at its start, with the current rate (or none if it is 0)
             mg_stop; mg_start
             mg_running && say "Memory guard is on: threshold ${MEMGUARD_LOW_KB} kB (now free $(mem_avail) kB). Log: $MEMGUARD_LOG" \
                        || die "memory guard did not start, see $MEMGUARD_LOG"
             ;;
         off)
-            mg_stop; rm -f "$MEMGUARD_INIT" "$MEMGUARD_PAUSE" "$MEMGUARD_CRON"
+            mg_stop; rm -f "$MEMGUARD_INIT" "$MEMGUARD_PAUSE" "$MEMGUARD_CRON" "$DNSLIM_HOOK"; dnslim_remove
             say "Memory guard is off"
             ;;
         *)
             if [ -x "$MEMGUARD_INIT" ]; then echo "Memory guard: on (threshold ${MEMGUARD_LOW_KB} kB, pause below ${MEMGUARD_CRIT_KB} kB, small client < ${MEMGUARD_SMALL_KB} kB)$(mg_running && echo ', running' || echo ', NOT running')"
                 if [ -x "$MEMGUARD_CRON" ] && [ "$MEMGUARD_NIGHT_KB" -gt 0 ] 2>/dev/null; then echo "Nightly restart: if the client is above ${MEMGUARD_NIGHT_KB} kB"; else echo "Nightly restart: off"; fi
                 if [ "$MEMGUARD_LOAD" -gt 0 ] 2>/dev/null; then echo "Overload brake: load >= ${MEMGUARD_LOAD} and free < $((MEMGUARD_LOW_KB * 3 / 2)) kB for 2 minutes"; else echo "Overload brake: off"; fi
+                if [ "$MEMGUARD_BLOAT_KB" -gt 0 ] 2>/dev/null; then echo "Early restart: client above ${MEMGUARD_BLOAT_KB} kB (RAM + swap), at most once per $((MEMGUARD_BLOAT_GAP / 60)) minutes"; else echo "Early restart: off"; fi
+                if [ "$DNSLIM_MAX" -gt 0 ] 2>/dev/null; then echo "DNS limit: ${DNSLIM_MAX} open requests per device$(iptables -w -S INPUT 2>/dev/null | grep -q -- '--dport 53 -m connlimit' || echo ' (rule NOT in the firewall)')"; else echo "DNS limit: off"; fi
+                echo "Swappiness: $(cat "$SWAPPINESS_FILE" 2>/dev/null)"
                 [ -f "$MEMGUARD_UDPT" ] && echo "Brake is on now: UDP conntrack timeout 5 s (back to $(cat "$MEMGUARD_UDPT") s within 10 minutes)"
             else echo "Memory guard: off — enable: tt-stats memguard on"; fi
             echo "Free memory:  $(mem_avail) kB; client: $(client_rss) kB (RAM + swap)"
@@ -693,6 +747,7 @@ case "$1" in
     memguard-run)   cmd_memguard_run ;;
     memguard-nightly) cmd_memguard_nightly ;;
     memguard-start) mg_start ;;
+    dnslimit-apply) dnslim_apply ;;
     memguard-stop)  mg_stop ;;
     version)   echo "$TTS_VERSION" ;;
     update-check) cmd_update_check "$2" ;;

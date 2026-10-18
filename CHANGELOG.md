@@ -21,6 +21,16 @@
   for 2 minutes while free memory is below 1.5× the threshold (was: below the threshold). That night free
   memory jumped 14 → 16 MB, the 2-minute count started over each time, and the load went up to 39.
 
+- **Three more protections against a bad evening** (real case: a DNS storm, the client grew to 27 MB, the load rose):
+  1. **Early restart.** A client that has grown past `MEMGUARD_BLOAT_KB` (20000 kB, RAM plus swap) is restarted
+     without waiting for free memory to run out; at most once per `MEMGUARD_BLOAT_GAP` (30 minutes). `0` turns it off.
+  2. **DNS limit per device.** One device may have at most `DNSLIM_MAX` (120) open DNS requests at the router;
+     the rest are dropped silently and the device simply repeats them. Normal devices have 5–40, a storm 200–300.
+     It uses `connlimit` (the `hashlimit` match is missing in the iptables of older firmware), IPv4 and IPv6, and a
+     hook in `netfilter.d` puts it back after the firmware rebuilds the filter table. `0` turns it off.
+  3. **Less swapping.** The guard lowers `vm.swappiness` to `MEMGUARD_SWAPPINESS` (10) when it starts (it is never raised).
+  `tt-stats memguard` shows all three.
+
 - **Razvilka:** «My exceptions» knows four more services and shows them as one line each, removable with
   one tap: Windows Update (Microsoft update downloads), Steam downloads, VR games (DiP VR) and Phone Link
   (Windows). Heavy downloads through the VPN load a weak router the most; these go direct.
