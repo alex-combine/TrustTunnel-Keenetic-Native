@@ -34,6 +34,18 @@ if [ -z "$TT_WAN_BG" ]; then
     exit 0
 fi
 
+# One check at a time: two links coming up together must not end in two reloads
+LOCK=/tmp/tt-wan-hook.lock
+if ! mkdir "$LOCK" 2>/dev/null; then
+    lts=$(cat "$LOCK/ts" 2>/dev/null)
+    # a lock older than 3 minutes was left by a killed copy (a check takes under a minute)
+    if ! { [ -n "$lts" ] && [ $(( $(date +%s) - lts )) -gt 180 ] 2>/dev/null && rm -rf "$LOCK" && mkdir "$LOCK" 2>/dev/null; }; then
+        logger -t "$LOG_TAG" "WAN event (${1:-?}): another check is running, skipping"; exit 0
+    fi
+fi
+date +%s > "$LOCK/ts"
+trap 'rm -rf "$LOCK"' EXIT
+
 # Wait first: an event fired while the service restarts itself must see the new start time
 EVENT_TS=$(date +%s)
 sleep 5

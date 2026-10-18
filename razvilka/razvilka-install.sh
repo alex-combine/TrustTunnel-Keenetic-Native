@@ -36,7 +36,7 @@ ask() {  # ask "question" "default" → $ANS
 }
 is_yes() { case "$1" in да|Да|ДА|д|Д|y|Y|yes|Yes|YES) return 0;; esac; return 1; }
 # system change: in a test into a folder — only print
-sys() { if [ -n "$R" ]; then echo "     [проба] $*"; else sh -c "$*"; fi; }
+sys() { if [ -n "$R" ]; then echo "     [проба] $*"; else sh -c "$*" </dev/null; fi; }   # never eats the stdin of a "while read" loop
 note() { mkdir -p "$R$ETC"; echo "$*" >> "$R$MAN"; }    # manifest: what was done (for rollback)
 
 # ---------- language ----------
@@ -67,7 +67,8 @@ if [ $MODE = uninstall ]; then
            esac; sys "ndmc -c 'system configuration save'"; echo "  ⚙️ $(L 'настройки прошивки: группа' 'firmware: group') $GROUP";;
     routes) sys "$b off";;
     merged) sys "ndmc -c 'object-group fqdn $a' >/dev/null"                   # a merged own list — back as it was
-           while read -r d; do sys "ndmc -c 'object-group fqdn $a include $d' </dev/null >/dev/null"; sys "ndmc -c 'no object-group fqdn $GROUP include $d' </dev/null >/dev/null"; done < "$R$c"
+           while read -r d; do sys "ndmc -c 'object-group fqdn $a include $d' >/dev/null"; done < "$R$c"
+           while read -r d; do sys "ndmc -c 'no object-group fqdn $GROUP include $d' >/dev/null"; done < "$R${c%.txt}.added"
            sys "ndmc -c 'dns-proxy route object-group $a $b${t:+ $t}' >/dev/null"; sys "ndmc -c 'system configuration save' >/dev/null"
            echo "  ↩️ $(L 'список' 'list') «$a»";;
   esac; done
@@ -183,14 +184,14 @@ done
 for p in /opt/etc/AdGuardHome:AdGuardHome /opt/etc/smartdns:smartdns /opt/etc/xray:Xray /opt/etc/sing-box:sing-box; do
   [ -e "${p%%:*}" ] && { FOUND=1; okm "${p#*:} — $(L 'не трогаю, встаю рядом' 'untouched, I sit next to it')"; }
 done
-GRP_EXISTS=0; [ -z "$R" ] && ndmc -c 'show running-config' 2>/dev/null | grep -q "^object-group fqdn $GROUP\$" && GRP_EXISTS=1
-[ $GRP_EXISTS = 1 ] && okm "$(L 'Группа сайтов' 'Site group') $GROUP $(L 'уже есть в прошивке' 'already exists in firmware')"
 # Own lists of direct sites (object-group fqdn with a DNS route through the ISP): they keep working,
 # but the bot shows and edits only $GROUP — offer to merge them (a real router had four such lists)
-RCF=/tmp/razvilka-rc.$$; trap 'rm -f $RCF $RCF.new $RCF.c $RCF.new.c' EXIT   # a copy of the router settings: never left behind
+RCF=/tmp/razvilka-rc.$$; trap 'rm -f $RCF $RCF.new $RCF.c $RCF.new.c' EXIT; trap 'exit 1' INT TERM HUP   # a copy of the router settings: never left behind
 if [ -z "$R" ]; then ndmc -c 'show running-config' > $RCF 2>/dev/null; else cp "$R/tmp/running-config.txt" $RCF 2>/dev/null || : > $RCF; fi
 rcclean() { awk '{gsub(/\033\[K/, ""); print}' "$1" > "$1.c" && mv "$1.c" "$1"; }   # ndmc puts terminal codes into its output
 rcclean $RCF
+GRP_EXISTS=0; grep -q "^object-group fqdn $GROUP\$" $RCF && GRP_EXISTS=1
+[ $GRP_EXISTS = 1 ] && okm "$(L 'Группа сайтов' 'Site group') $GROUP $(L 'уже есть в прошивке' 'already exists in firmware')"
 OTHER=$(awk -v g="$GROUP" -v w="$WAN_NDM" '
   /^object-group fqdn / {cur = $3; next}
   /^[^ ]/ {cur = ""; dp = ($1 == "dns-proxy")}
@@ -366,14 +367,20 @@ if [ $MERGE = 1 ]; then
   for g in $MLIST; do
     awk -v g="$g" '/^object-group fqdn / {cur = $3; next} /^[^ ]/ {cur = ""} cur == g && $1 == "include" {print $2}' $RCF > "$R$BK/merged_$g.txt"
     tail=$(awk -v g="$g" '/^[^ ]/ {dp = ($1 == "dns-proxy")} dp && $1 == "route" && $2 == "object-group" && $3 == g {$1 = $2 = $3 = $4 = ""; sub(/^ +/, ""); print; exit}' $RCF)
-    while read -r d; do sys "ndmc -c 'object-group fqdn $GROUP include $d' </dev/null >/dev/null"; done < "$R$BK/merged_$g.txt"
+    # only the sites $GROUP does not have yet are added — and only they are taken out again on failure or --uninstall
+    awk -v g="$GROUP" 'NR == FNR {if ($0 != "") want[$0] = 1; next} /^object-group fqdn / {cur = $3; next} /^[^ ]/ {cur = ""} cur == g && $1 == "include" {have[$2] = 1}
+      END {for (d in want) if (!(d in have)) print d}' "$R$BK/merged_$g.txt" $RCF > "$R$BK/merged_$g.added"
+    while read -r d; do sys "ndmc -c 'object-group fqdn $GROUP include $d' >/dev/null"; done < "$R$BK/merged_$g.added"
     # every site must be in $GROUP before the old list goes (a full group or a rejected entry would lose it)
     miss=0
     if [ -z "$R" ]; then ndmc -c 'show running-config' > $RCF.new 2>/dev/null; rcclean $RCF.new
       while read -r d; do awk -v g="$GROUP" -v d="$d" '/^object-group fqdn / {cur = $3; next} /^[^ ]/ {cur = ""} cur == g && $1 == "include" && $2 == d {f = 1} END {exit !f}' $RCF.new || miss=$((miss + 1)); done < "$R$BK/merged_$g.txt"
       rm -f $RCF.new
     fi
-    if [ $miss -gt 0 ]; then wrn "$(L 'Список' 'List') «$g»: $miss $(L 'сайтов не встали в' 'sites did not go into') $GROUP — $(L 'старый список оставляю как есть' 'the old list stays as it is')"; continue; fi
+    if [ $miss -gt 0 ]; then
+      while read -r d; do sys "ndmc -c 'no object-group fqdn $GROUP include $d' >/dev/null"; done < "$R$BK/merged_$g.added"
+      wrn "$(L 'Список' 'List') «$g»: $miss $(L 'сайтов не встали в' 'sites did not go into') $GROUP — $(L 'старый список оставляю как есть' 'the old list stays as it is')"; continue
+    fi
     while read -r d; do grep -qxF "$d" "$R$ETC/sites" 2>/dev/null || echo "$d" >> "$R$ETC/sites"; done < "$R$BK/merged_$g.txt"
     sys "ndmc -c 'no dns-proxy route object-group $g $WAN_NDM' >/dev/null"
     sys "ndmc -c 'no object-group fqdn $g' >/dev/null"
