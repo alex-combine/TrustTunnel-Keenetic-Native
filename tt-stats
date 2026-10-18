@@ -374,7 +374,7 @@ mg_blackbox() {  # $1 = free kB, $2 = load, $3 = note
         awk '/^(MemFree|Cached|Shmem|Slab|SUnreclaim):/ {sub(":", "", $1); printf " %s %s", $1, $2} END {print " kB"}' /proc/meminfo | sed 's/^/  kernel  /'
         df /tmp 2>/dev/null | awk 'NR > 1 {print "  /tmp    " $3 " kB in RAM"}'
         echo "  memory: RAM + swap, pid, name"
-        awk '/^Name:/ {n = $2; r = 0} /^Pid:/ {p = $2} /^VmRSS:/ {r = $2} /^VmSwap:/ {print r + $2, r, $2, p, n}' /proc/[0-9]*/status 2>/dev/null |
+        cat /proc/[0-9]*/status 2>/dev/null | awk '/^Name:/ {n = $2; r = 0} /^Pid:/ {p = $2} /^VmRSS:/ {r = $2} /^VmSwap:/ {print r + $2, r, $2, p, n}' |
             sort -rn | head -6 | awk '{printf "    %6d kB = %d + %d  %s %s\n", $1, $2, $3, $4, $5}'
         echo "  cpu: $(top -bn1 2>/dev/null | awk 'NR == 2 {sub(/^CPU: */, ""); print}')"
         top -bn1 2>/dev/null | awk 'NR > 4 && NR <= 10 {printf "    %5s  %s %s %s\n", $8, $1, $9, $10}'

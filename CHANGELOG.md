@@ -21,7 +21,8 @@ storm of 1000 DNS requests from one device.
   rest are dropped silently and the device simply repeats them. Normal devices have 5–40, a storm 200–300. It
   uses `connlimit` (the `hashlimit` match is missing in the iptables of older firmware), IPv4 and IPv6. A hook in
   `netfilter.d` puts it back after the firmware rebuilds the filter table, and the guard checks it once a minute
-  (after one reboot the router was left without it). `0` turns it off.
+  (after one reboot the router was left without it). `0` turns it off. A second router in router mode behind
+  this one counts as one device for its whole network: raise `DNSLIM_MAX` for it.
 - **Less swapping.** The guard lowers `vm.swappiness` to `MEMGUARD_SWAPPINESS` (10) when it starts; it is never
   raised.
 - **Fix: the client is counted as RAM plus swap.** A real night: a heavy download through the VPN, the kernel
@@ -36,6 +37,8 @@ storm of 1000 DNS requests from one device.
 
 ### WAN hook
 
+- **Link down events are ignored** (the VPN is checked when a link comes up), and the checks run in the
+  background so the firmware does not wait for them.
 - **No needless restarts.** A WAN event (any interface going up) used to reload the client. A real day: the
   backup 4G modem reconnected, the VPN on the main link was fine, and it was cut for 11 s anyway. Now the hook
   first checks whether the VPN still passes data and reloads only if it does not.
@@ -50,8 +53,8 @@ storm of 1000 DNS requests from one device.
 - **Own lists of direct sites are merged.** If the router already has its own site groups with a DNS route
   through the ISP (a real router had four such lists, and the bot showed none of them), the installer lists them
   and offers to merge them into the Razvilka list: the sites keep going direct and the bot shows them. The old
-  lists are removed, their copy is kept in the backup folder, and `--uninstall` brings them back. Lists with
-  excludes are left as they are.
+  lists are removed, their copy is kept in the backup folder, and `--uninstall` brings them back. Every site is checked
+  in the Razvilka list before an old list is removed. Lists with excludes or a second route are left as they are.
 - «My exceptions» knows three more services and shows them as one line each, removable with one tap: Windows
   Update (Microsoft update downloads), Steam downloads and Phone Link (Windows). Heavy downloads through the VPN
   load a weak router the most; these go direct.

@@ -58,7 +58,7 @@ if [ $MODE = uninstall ]; then
   sed -i '/# razvilka:guard$/d' "$R/opt/etc/crontab" 2>/dev/null; rm -f "$R/opt/etc/ndm/netfilter.d/57-razvilka-fuse.sh"   # nothing may put the fuse back
   [ -x "$R$APP/rzv-act.sh" ] && sys "$APP/rzv-act.sh fuse_off >/dev/null 2>&1"   # take the DNS fuse off if it is on
   # walk the list from the end
-  awk '{a[NR]=$0} END{for(i=NR;i>=1;i--) print a[i]}' "$R$MAN" | while read -r kind a b c; do case "$kind" in
+  awk '{a[NR]=$0} END{for(i=NR;i>=1;i--) print a[i]}' "$R$MAN" | while read -r kind a b c t; do case "$kind" in
     file)  case "$a" in "$ETC"/*) continue;; esac                            # settings — decided by the question below
            rm -f "$R$a"; echo "  🗑 $a";;                                     # new file — delete
     repl)  cp -p "$R$b" "$R$a" && echo "  ↩️ $a";;                            # replaced file — restore the copy
@@ -67,8 +67,8 @@ if [ $MODE = uninstall ]; then
            esac; sys "ndmc -c 'system configuration save'"; echo "  ⚙️ $(L 'настройки прошивки: группа' 'firmware: group') $GROUP";;
     routes) sys "$b off";;
     merged) sys "ndmc -c 'object-group fqdn $a' >/dev/null"                   # a merged own list — back as it was
-           while read -r d; do sys "ndmc -c 'object-group fqdn $a include $d' >/dev/null"; sys "ndmc -c 'no object-group fqdn $GROUP include $d' >/dev/null"; done < "$R$c"
-           sys "ndmc -c 'dns-proxy route object-group $a $b' >/dev/null"; sys "ndmc -c 'system configuration save' >/dev/null"
+           while read -r d; do sys "ndmc -c 'object-group fqdn $a include $d' </dev/null >/dev/null"; sys "ndmc -c 'no object-group fqdn $GROUP include $d' </dev/null >/dev/null"; done < "$R$c"
+           sys "ndmc -c 'dns-proxy route object-group $a $b${t:+ $t}' >/dev/null"; sys "ndmc -c 'system configuration save' >/dev/null"
            echo "  ↩️ $(L 'список' 'list') «$a»";;
   esac; done
   ask "$(L 'Удалить и настройки Развилки (токен, списки)? (да/нет)' 'Also delete Razvilka settings (token, lists)? (yes/no)')" "$(L нет no)"
@@ -187,19 +187,19 @@ GRP_EXISTS=0; [ -z "$R" ] && ndmc -c 'show running-config' 2>/dev/null | grep -q
 [ $GRP_EXISTS = 1 ] && okm "$(L 'Группа сайтов' 'Site group') $GROUP $(L 'уже есть в прошивке' 'already exists in firmware')"
 # Own lists of direct sites (object-group fqdn with a DNS route through the ISP): they keep working,
 # but the bot shows and edits only $GROUP — offer to merge them (a real router had four such lists)
-RCF=/tmp/razvilka-rc.$$
+RCF=/tmp/razvilka-rc.$$; trap 'rm -f $RCF $RCF.new' EXIT   # a copy of the router settings: never left behind
 if [ -z "$R" ]; then ndmc -c 'show running-config' > $RCF 2>/dev/null; else cp "$R/tmp/running-config.txt" $RCF 2>/dev/null || : > $RCF; fi
 OTHER=$(awk -v g="$GROUP" -v w="$WAN_NDM" '
   /^object-group fqdn / {cur = $3; next}
   /^[^ ]/ {cur = ""; dp = ($1 == "dns-proxy")}
   cur != "" && $1 == "include" {n[cur]++}
   cur != "" && $1 == "exclude" {x[cur] = 1}
-  dp && $1 == "route" && $2 == "object-group" && $4 == w && $3 != g {r[$3] = 1}
-  END {for (k in r) if (n[k] > 0) print k, n[k], x[k] + 0}' $RCF)
+  dp && $1 == "route" && $2 == "object-group" && $3 != g {rc[$3]++; if ($4 == w) r[$3] = 1}
+  END {for (k in r) if (n[k] > 0) print k, n[k], (x[k] || rc[k] > 1) ? 1 : 0}' $RCF)
 MLIST=$(echo "$OTHER" | awk 'NF && $3 == 0 {printf "%s ", $1}'); MLIST=${MLIST% }
 if [ -n "$OTHER" ]; then
   echo "$OTHER" | while read -r g n x; do
-    [ -n "$g" ] && wrn "$(L 'Свой список прямых сайтов' 'Own list of direct sites') «$g»: $n$([ "$x" = 1 ] && echo " — $(L 'есть исключения (exclude), не трогаю' 'has excludes, left as is')")"
+    [ -n "$g" ] && wrn "$(L 'Свой список прямых сайтов' 'Own list of direct sites') «$g»: $n$([ "$x" = 1 ] && echo " — $(L 'есть исключения или второй маршрут, не трогаю' 'has excludes or a second route, left as is')")"
   done
   echo "     $(L 'Они работают, но бот Развилки видит и правит только свой список.' 'They work, but the Razvilka bot sees and edits only its own list.')"
 fi
@@ -363,13 +363,19 @@ fi
 if [ $MERGE = 1 ]; then
   for g in $MLIST; do
     awk -v g="$g" '/^object-group fqdn / {cur = $3; next} /^[^ ]/ {cur = ""} cur == g && $1 == "include" {print $2}' $RCF > "$R$BK/merged_$g.txt"
-    while read -r d; do
-      sys "ndmc -c 'object-group fqdn $GROUP include $d' >/dev/null"
-      grep -qxF "$d" "$R$ETC/sites" 2>/dev/null || echo "$d" >> "$R$ETC/sites"
-    done < "$R$BK/merged_$g.txt"
+    tail=$(awk -v g="$g" '/^[^ ]/ {dp = ($1 == "dns-proxy")} dp && $1 == "route" && $2 == "object-group" && $3 == g {$1 = $2 = $3 = $4 = ""; sub(/^ +/, ""); print; exit}' $RCF)
+    while read -r d; do sys "ndmc -c 'object-group fqdn $GROUP include $d' </dev/null >/dev/null"; done < "$R$BK/merged_$g.txt"
+    # every site must be in $GROUP before the old list goes (a full group or a rejected entry would lose it)
+    miss=0
+    if [ -z "$R" ]; then ndmc -c 'show running-config' > $RCF.new 2>/dev/null
+      while read -r d; do awk -v g="$GROUP" -v d="$d" '/^object-group fqdn / {cur = $3; next} /^[^ ]/ {cur = ""} cur == g && $1 == "include" && $2 == d {f = 1} END {exit !f}' $RCF.new || miss=$((miss + 1)); done < "$R$BK/merged_$g.txt"
+      rm -f $RCF.new
+    fi
+    if [ $miss -gt 0 ]; then wrn "$(L 'Список' 'List') «$g»: $miss $(L 'сайтов не встали в' 'sites did not go into') $GROUP — $(L 'старый список оставляю как есть' 'the old list stays as it is')"; continue; fi
+    while read -r d; do grep -qxF "$d" "$R$ETC/sites" 2>/dev/null || echo "$d" >> "$R$ETC/sites"; done < "$R$BK/merged_$g.txt"
     sys "ndmc -c 'no dns-proxy route object-group $g $WAN_NDM' >/dev/null"
     sys "ndmc -c 'no object-group fqdn $g' >/dev/null"
-    note "merged $g $WAN_NDM $BK/merged_$g.txt"
+    note "merged $g $WAN_NDM $BK/merged_$g.txt $tail"
     okm "$(L 'Список' 'List') «$g» → $GROUP: $(wc -l < "$R$BK/merged_$g.txt")"
   done
   sys "ndmc -c 'system configuration save' >/dev/null"

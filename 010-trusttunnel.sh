@@ -25,6 +25,15 @@ if [ "$1" = "$NDMC_IFACE" ] || [ "${interface:-}" = "$NDMC_IFACE" ] || [ "${syst
     exit 0
 fi
 
+# A link going down is not a reason to reload: the VPN is checked when a link comes up
+[ "$1" = stop ] && exit 0
+
+# The checks below may take up to a minute: do not hold up KeeneticOS (it runs the hooks in turn)
+if [ -z "$TT_WAN_BG" ]; then
+    TT_WAN_BG=1 "$0" "$@" </dev/null >/dev/null 2>&1 &
+    exit 0
+fi
+
 # Wait first: an event fired while the service restarts itself must see the new start time
 EVENT_TS=$(date +%s)
 sleep 5
