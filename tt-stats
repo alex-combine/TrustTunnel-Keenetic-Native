@@ -27,7 +27,7 @@
 #
 # Log: /opt/var/log/tt-stats.log, memory guard: /opt/var/log/tt-memguard.log
 
-TTS_VERSION="2.3.4"
+TTS_VERSION="2.3.5"
 SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 TTS_REPO_URL="${TTS_REPO_URL:-https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download}"
 
@@ -56,6 +56,7 @@ UPD_CRON="${TTS_UPD_CRON:-/opt/etc/cron.daily/tt-stats-update-check}"
 MEMGUARD_INIT="${MEMGUARD_INIT:-/opt/etc/init.d/S97tt-memguard}"
 MEMGUARD_PID="${MEMGUARD_PID:-/opt/var/run/tt-memguard.pid}"
 MEMGUARD_LOG="${MEMGUARD_LOG:-/opt/var/log/tt-memguard.log}"
+MEMGUARD_BOX="${MEMGUARD_BOX:-/opt/var/log/tt-blackbox.log}"   # who used memory and connections
 MEMGUARD_PAUSE="/tmp/tt-memguard.pause"
 MEMGUARD_HIST="/tmp/tt-memguard.hist"
 MEMGUARD_CRON="${MEMGUARD_CRON:-/opt/etc/cron.daily/tt-memguard-nightly}"
@@ -76,6 +77,7 @@ MEMGUARD_SMALL_KB="${MEMGUARD_SMALL_KB:-5000}"   # client smaller than this: mem
 MEMGUARD_NIGHT_KB="${MEMGUARD_NIGHT_KB:-12000}"  # nightly restart if the client is bigger (0 = off)
 MEMGUARD_LOAD="${MEMGUARD_LOAD:-20}"             # overload brake: load average at or above this (0 = off)
 MEMGUARD_SHED="${MEMGUARD_SHED:-geo-build.sh}"   # heavy optional jobs to stop under overload
+MEMGUARD_BOX_LOAD="${MEMGUARD_BOX_LOAD:-8}"     # black box: a snapshot a minute from this load (0 = off)
 OPKG_IFACE="opkgtun${TUN_IDX}"
 NDM_IFACE="OpkgTun${TUN_IDX}"
 
@@ -350,6 +352,22 @@ mg_brake() {  # $1 = load, $2 = free kB
         ( sleep 600; cat "$MEMGUARD_UDPT" > "$UDP_TIMEOUT_FILE"; rm -f "$MEMGUARD_UDPT" ) </dev/null >/dev/null 2>&1 &
     fi
 }
+# Black box: who holds the memory and which devices hold the connections, so the next bad evening
+# can be explained afterwards. Called at most once a minute while memory is low or the load is high.
+mg_blackbox() {  # $1 = free kB, $2 = load
+    [ -f "$MEMGUARD_BOX" ] && [ "$(wc -c < "$MEMGUARD_BOX")" -gt 300000 ] && mv "$MEMGUARD_BOX" "$MEMGUARD_BOX.old"
+    {
+        echo "$(ts) free $1 kB, load $2, swap used $(awk '/SwapTotal/ {t = $2} /SwapFree/ {f = $2} END {print t - f}' /proc/meminfo) kB, connections $(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null)"
+        # shellcheck disable=SC2016  # awk program
+        awk '/^Name:/ {n = $2} /^VmRSS:/ {print $2, n}' /proc/[0-9]*/status 2>/dev/null | sort -rn | head -5 |
+            awk '{printf "  memory      %6d kB  %s\n", $1, $2}'
+        [ -r /proc/net/nf_conntrack ] && awk '{for (i = 1; i <= NF; i++) if ($i ~ /^src=/) {print substr($i, 5); break}}' /proc/net/nf_conntrack |
+            sort | uniq -c | sort -rn | head -5 | while read -r c ip; do
+                printf '  connections %6d     %s %s\n' "$c" "$ip" "$(awk -v ip="$ip" '$1 == ip {print $4}' /proc/net/arp)"
+            done
+    } >> "$MEMGUARD_BOX" 2>/dev/null
+}
+
 # The PID file survives a crash on the USB drive; after a reboot that PID may belong to another
 # process, so check the command line, not just that the PID exists.
 mg_running() { p=$(cat "$MEMGUARD_PID" 2>/dev/null); [ -n "$p" ] && grep -q memguard-run "/proc/$p/cmdline" 2>/dev/null; }
@@ -376,9 +394,15 @@ cmd_memguard_run() {
     trap '[ "$(cat "$MEMGUARD_PID" 2>/dev/null)" = "$$" ] && rm -f "$MEMGUARD_PID"; exit 0' TERM INT
     mlog "started: threshold ${MEMGUARD_LOW_KB} kB, now free $(mem_avail) kB"
     [ -f "$MEMGUARD_UDPT" ] && { cat "$MEMGUARD_UDPT" > "$UDP_TIMEOUT_FILE"; rm -f "$MEMGUARD_UDPT"; }   # restore after a crash
-    hot=0; braked=0
+    hot=0; braked=0; boxed=0
     while true; do
         a=$(mem_avail)
+        if [ "$MEMGUARD_BOX_LOAD" -gt 0 ] 2>/dev/null; then
+            l=$(load1); now=$(date +%s)
+            if { [ "${a:-999999}" -lt $((MEMGUARD_LOW_KB * 3 / 2)) ] || [ "${l:-0}" -ge "$MEMGUARD_BOX_LOAD" ]; } && [ $((now - boxed)) -ge 60 ]; then
+                mg_blackbox "$a" "$(cut -d' ' -f1-3 "${LOADAVG_FILE:-/proc/loadavg}")"; boxed=$now
+            fi
+        fi
         if [ "$MEMGUARD_LOAD" -gt 0 ] 2>/dev/null; then
             l=$(load1); now=$(date +%s)
             if [ "${a:-999999}" -lt "$MEMGUARD_LOW_KB" ] && [ "${l:-0}" -ge "$MEMGUARD_LOAD" ]; then
@@ -471,6 +495,7 @@ EOF
             echo "Free memory:  $(mem_avail) kB; client: $(client_rss) kB"
             [ -f "$MEMGUARD_PAUSE" ] && echo "VPN is paused by the guard (starts again within 15 minutes)"
             [ -f "$MEMGUARD_LOG" ] && { echo "Last events:"; tail -n 5 "$MEMGUARD_LOG"; }
+            [ -s "$MEMGUARD_BOX" ] && echo "Black box (who used memory and connections): $(grep -c '^[0-9]' "$MEMGUARD_BOX") snapshots, last $(grep '^[0-9]' "$MEMGUARD_BOX" | tail -1 | cut -c1-19) — $MEMGUARD_BOX"
             ;;
     esac
 }

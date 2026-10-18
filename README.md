@@ -424,6 +424,8 @@ The guard does not hit the wrong target: if the client is small (below 5000 kB),
 
 **Overload brake.** When the VPN drops, devices behind a kill switch may retry DNS without a pause — thousands of connections, the kernel swaps and a 128 MB router can hang; restarting the client does not help then. If free memory stays below the threshold and the load average is 20 or more for 2 minutes, the guard stops heavy optional jobs (the Razvilka map build) and for 10 minutes lets short UDP connections expire in 5 s instead of 30 s. `MEMGUARD_LOAD` in `mode.conf` sets the load (`0` turns the brake off), `MEMGUARD_SHED` — which jobs to stop.
 
+**Black box.** While free memory is below 1.5× the threshold or the load is 8 or more, the guard writes to `/opt/var/log/tt-blackbox.log` once a minute who holds the memory (the 5 biggest processes) and which devices hold the most connections (IP and MAC). After a bad evening you can see the culprit. `MEMGUARD_BOX_LOAD` in `mode.conf` sets the load (`0` turns it off).
+
 ### Update notifications
 
 The router tells you when a new release is out — it never updates itself:
