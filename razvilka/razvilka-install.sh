@@ -187,8 +187,10 @@ GRP_EXISTS=0; [ -z "$R" ] && ndmc -c 'show running-config' 2>/dev/null | grep -q
 [ $GRP_EXISTS = 1 ] && okm "$(L 'Группа сайтов' 'Site group') $GROUP $(L 'уже есть в прошивке' 'already exists in firmware')"
 # Own lists of direct sites (object-group fqdn with a DNS route through the ISP): they keep working,
 # but the bot shows and edits only $GROUP — offer to merge them (a real router had four such lists)
-RCF=/tmp/razvilka-rc.$$; trap 'rm -f $RCF $RCF.new' EXIT   # a copy of the router settings: never left behind
+RCF=/tmp/razvilka-rc.$$; trap 'rm -f $RCF $RCF.new $RCF.c $RCF.new.c' EXIT   # a copy of the router settings: never left behind
 if [ -z "$R" ]; then ndmc -c 'show running-config' > $RCF 2>/dev/null; else cp "$R/tmp/running-config.txt" $RCF 2>/dev/null || : > $RCF; fi
+rcclean() { awk '{gsub(/\033\[K/, ""); print}' "$1" > "$1.c" && mv "$1.c" "$1"; }   # ndmc puts terminal codes into its output
+rcclean $RCF
 OTHER=$(awk -v g="$GROUP" -v w="$WAN_NDM" '
   /^object-group fqdn / {cur = $3; next}
   /^[^ ]/ {cur = ""; dp = ($1 == "dns-proxy")}
@@ -367,7 +369,7 @@ if [ $MERGE = 1 ]; then
     while read -r d; do sys "ndmc -c 'object-group fqdn $GROUP include $d' </dev/null >/dev/null"; done < "$R$BK/merged_$g.txt"
     # every site must be in $GROUP before the old list goes (a full group or a rejected entry would lose it)
     miss=0
-    if [ -z "$R" ]; then ndmc -c 'show running-config' > $RCF.new 2>/dev/null
+    if [ -z "$R" ]; then ndmc -c 'show running-config' > $RCF.new 2>/dev/null; rcclean $RCF.new
       while read -r d; do awk -v g="$GROUP" -v d="$d" '/^object-group fqdn / {cur = $3; next} /^[^ ]/ {cur = ""} cur == g && $1 == "include" && $2 == d {f = 1} END {exit !f}' $RCF.new || miss=$((miss + 1)); done < "$R$BK/merged_$g.txt"
       rm -f $RCF.new
     fi
