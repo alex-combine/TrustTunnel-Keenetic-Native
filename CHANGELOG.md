@@ -1,52 +1,55 @@
 # Changelog
 
-## v2.3.5 — memory guard: a black box for bad evenings
+## v2.3.5 — memory guard: black box, early restart, DNS limit; WAN hook without needless restarts
 
-- While free memory is below 1.5× the guard threshold or the load is `MEMGUARD_BOX_LOAD` (8) or more, the guard
-  writes a snapshot once a minute to `/opt/var/log/tt-blackbox.log`, and once an hour a baseline of a normal
-  state: free memory, load, swap, kernel memory (slab, cache) and `/tmp`; the processes that hold the most
-  memory, **RAM plus swap** (under zram a big process looks small); CPU and the busiest processes; connections
-  per device (total, DNS, UDP, IP and MAC); where the connections go; traffic per interface; new kernel
-  warnings (OOM kills, full conntrack table). No `ndmc` calls, about a second of work.
-  A real evening on a 128 MB router: memory went to swap, the load reached 17 and the VPN stopped passing data,
-  but the TrustTunnel client was small — something else ate the memory, and the logs could not say what.
-  `tt-stats memguard` shows how many snapshots there are. The file is rotated at 500 kB.
-  `MEMGUARD_BOX_LOAD=0` in `mode.conf` turns it off.
+Everything here came from real evenings on a 128 MB router (Keenetic with zram) and was checked on it under
+a controlled stress test: a forced reload during a WAN event, the VPN server unreachable for 2 minutes, and a
+storm of 1000 DNS requests from one device.
 
-- **Fix: the guard counts the client as RAM plus swap.** A real night: a heavy download through the VPN, the
-  kernel pushed the client out to zram (0.7 MB in RAM, 21 MB in swap), the VPN stood still, and the guard
-  logged "the client is small, something else eats the memory" instead of restarting it. The nightly
-  restart and `tt-stats memguard` use the same number now.
-- **Fix: the overload brake is not reset by jumps of free memory.** It now fires on a load of `MEMGUARD_LOAD`
-  for 2 minutes while free memory is below 1.5× the threshold (was: below the threshold). That night free
-  memory jumped 14 → 16 MB, the 2-minute count started over each time, and the load went up to 39.
+### Memory guard (`tt-stats memguard`)
 
-- **Three more protections against a bad evening** (real case: a DNS storm, the client grew to 27 MB, the load rose):
-  1. **Early restart.** A client that has grown past `MEMGUARD_BLOAT_KB` (25000 kB, RAM plus swap) is restarted
-     without waiting for free memory to run out; at most once per `MEMGUARD_BLOAT_GAP` (30 minutes). `0` turns it off.
-  2. **DNS limit per device.** One device may have at most `DNSLIM_MAX` (120) open DNS requests at the router;
-     the rest are dropped silently and the device simply repeats them. Normal devices have 5–40, a storm 200–300.
-     It uses `connlimit` (the `hashlimit` match is missing in the iptables of older firmware), IPv4 and IPv6, and a
-     hook in `netfilter.d` puts it back after the firmware rebuilds the filter table. `0` turns it off.
-  3. **Less swapping.** The guard lowers `vm.swappiness` to `MEMGUARD_SWAPPINESS` (10) when it starts (it is never raised).
-  `tt-stats memguard` shows all three.
+- **Black box.** While free memory is below 1.5× the guard threshold or the load is `MEMGUARD_BOX_LOAD` (8) or
+  more, the guard writes a snapshot once a minute to `/opt/var/log/tt-blackbox.log`, and once an hour a baseline
+  of a normal state: free memory, load, swap, kernel memory (slab, cache) and `/tmp`; the processes that hold the
+  most memory, **RAM plus swap** (under zram a big process looks small); CPU and the busiest processes;
+  connections per device (total, DNS, UDP, IP and MAC); where the connections go; traffic per interface; new
+  kernel warnings (OOM kills, full conntrack table). No `ndmc` calls, about a second of work. The file is rotated
+  at 500 kB. `MEMGUARD_BOX_LOAD=0` in `mode.conf` turns it off.
+- **Early restart.** A client that has grown past `MEMGUARD_BLOAT_KB` (25000 kB, RAM plus swap) is restarted
+  without waiting for free memory to run out; at most once per `MEMGUARD_BLOAT_GAP` (30 minutes). `0` turns it off.
+- **DNS limit per device.** One device may have at most `DNSLIM_MAX` (120) open DNS requests at the router; the
+  rest are dropped silently and the device simply repeats them. Normal devices have 5–40, a storm 200–300. It
+  uses `connlimit` (the `hashlimit` match is missing in the iptables of older firmware), IPv4 and IPv6. A hook in
+  `netfilter.d` puts it back after the firmware rebuilds the filter table, and the guard checks it once a minute
+  (after one reboot the router was left without it). `0` turns it off.
+- **Less swapping.** The guard lowers `vm.swappiness` to `MEMGUARD_SWAPPINESS` (10) when it starts; it is never
+  raised.
+- **Fix: the client is counted as RAM plus swap.** A real night: a heavy download through the VPN, the kernel
+  pushed the client out to zram (0.7 MB in RAM, 21 MB in swap), the VPN stood still, and the guard logged "the
+  client is small, something else eats the memory" instead of restarting it. The nightly restart and
+  `tt-stats memguard` use the same number now.
+- **Fix: the overload brake is not reset by jumps of free memory.** It fires on a load of `MEMGUARD_LOAD` for
+  2 minutes while free memory is below 1.5× the threshold (was: below the threshold). That night free memory
+  jumped 14 → 16 MB, the 2-minute count started over each time, and the load went up to 39.
+- `tt-stats memguard` shows all of this: early restart, DNS limit (and whether the rule is in the firewall),
+  swappiness, black box.
 
-- **WAN hook: no restart loop.** A reload brings the tunnel down and up, KeeneticOS reports it as a WAN event,
-  and the hook found the tunnel still connecting and reloaded again. A real morning: 5 minutes of restarts in a
-  row. Now, when the VPN does not pass data, the hook waits 30 s and reloads only if the client was not restarted
+### WAN hook
+
+- **No needless restarts.** A WAN event (any interface going up) used to reload the client. A real day: the
+  backup 4G modem reconnected, the VPN on the main link was fine, and it was cut for 11 s anyway. Now the hook
+  first checks whether the VPN still passes data and reloads only if it does not.
+- **No restart loop.** A reload brings the tunnel down and up, KeeneticOS reports it as a WAN event, and the
+  hook found the tunnel still connecting and reloaded again — a real morning: 5 minutes of restarts in a row.
+  Now, when the VPN does not pass data, the hook waits 30 s and reloads only if nobody restarted the client
   meanwhile and the VPN still does not pass data. It also recognises its own tunnel by the interface name that
   KeeneticOS passes in the environment.
-- **DNS limit stays in the firewall.** After a reboot the router was left without it; the guard now checks the rule
-  once a minute and puts it back. The early restart limit is 25 MB (20 MB fired several times a day for a client
-  that normally sits near 20 MB).
 
-- **Razvilka:** «My exceptions» knows four more services and shows them as one line each, removable with
-  one tap: Windows Update (Microsoft update downloads), Steam downloads, VR games (DiP VR) and Phone Link
-  (Windows). Heavy downloads through the VPN load a weak router the most; these go direct.
+### Razvilka
 
-- **WAN hook: no needless VPN restarts.** A WAN event (any interface going up) used to reload the client.
-  A real day: the backup 4G modem reconnected, the VPN on the main link was fine, and it was cut for 11 s
-  anyway. Now the hook first checks whether the VPN still passes data and reloads only if it does not.
+- «My exceptions» knows three more services and shows them as one line each, removable with one tap: Windows
+  Update (Microsoft update downloads), Steam downloads and Phone Link (Windows). Heavy downloads through the VPN
+  load a weak router the most; these go direct.
 
 ## v2.3.4 — memory guard: default threshold 15000 kB
 
