@@ -225,7 +225,8 @@ if [ "$D_STATE" = attach ] || [ "$D_STATE" = classic ] || [ "$D_STATE" = socks ]
     cp -p "$W/010-trusttunnel.sh" /opt/etc/ndm/wan.d/010-trusttunnel.sh.new && mv /opt/etc/ndm/wan.d/010-trusttunnel.sh.new /opt/etc/ndm/wan.d/010-trusttunnel.sh
     cp -p "$W/tt-stats" /opt/bin/tt-stats.new && mv /opt/bin/tt-stats.new /opt/bin/tt-stats
     /opt/bin/tt-stats update-check --install-cron >/dev/null 2>&1 || true
-    [ -x /opt/etc/init.d/S97tt-memguard ] && { /opt/etc/init.d/S97tt-memguard restart >/dev/null 2>&1 || true; }
+    # memguard on rewrites its service file and hooks and restarts the guard with the new code (keeps the threshold)
+    [ -x /opt/etc/init.d/S97tt-memguard ] && { /opt/bin/tt-stats memguard on >/dev/null 2>&1 || true; }
     rm -rf "$W"
     if [ -z "$D_KS" ]; then
         if grep -q '^[[:space:]]*killswitch_enabled' "$D_CFG"; then sed -i 's/^[[:space:]]*killswitch_enabled.*/killswitch_enabled = true/' "$D_CFG"

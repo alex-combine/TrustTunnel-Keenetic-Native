@@ -85,6 +85,11 @@ SWAPPINESS_FILE="${SWAPPINESS_FILE:-/proc/sys/vm/swappiness}"
 DNSLIM_MAX="${DNSLIM_MAX:-120}"                  # DNS requests one device may have open at the router (they live ~30 s; normal is 5-40, a storm 200-300; 0 = off)
 DNSLIM_HOOK="${DNSLIM_HOOK:-/opt/etc/ndm/netfilter.d/58-tt-dnslimit.sh}"
 DNSLIM_IF="${DNSLIM_IF:-br+}"                    # LAN bridges
+DNSLIM_EXEMPT="${DNSLIM_EXEMPT:-}"               # addresses without the limit: a second router, Pi-hole/AdGuard on a NAS (space-separated, IPv4/IPv6)
+numor() { case "$1" in ''|*[!0-9]*) echo "$2" ;; *) echo "$1" ;; esac; }   # a typo in mode.conf falls back to the default
+MEMGUARD_BLOAT_KB=$(numor "$MEMGUARD_BLOAT_KB" 25000); MEMGUARD_BLOAT_GAP=$(numor "$MEMGUARD_BLOAT_GAP" 1800)
+MEMGUARD_SWAPPINESS=$(numor "$MEMGUARD_SWAPPINESS" 10); MEMGUARD_BOX_LOAD=$(numor "$MEMGUARD_BOX_LOAD" 8)
+MEMGUARD_LOAD=$(numor "$MEMGUARD_LOAD" 20); DNSLIM_MAX=$(numor "$DNSLIM_MAX" 120)
 OPKG_IFACE="opkgtun${TUN_IDX}"
 NDM_IFACE="OpkgTun${TUN_IDX}"
 
@@ -378,7 +383,7 @@ mg_blackbox() {  # $1 = free kB, $2 = load, $3 = note
             sort -rn | head -6 | awk '{printf "    %6d kB = %d + %d  %s %s\n", $1, $2, $3, $4, $5}'
         echo "  cpu: $(top -bn1 2>/dev/null | awk 'NR == 2 {sub(/^CPU: */, ""); print}')"
         top -bn1 2>/dev/null | awk 'NR > 4 && NR <= 10 {printf "    %5s  %s %s %s\n", $8, $1, $9, $10}'
-        if [ -r /proc/net/nf_conntrack ]; then
+        if [ -r /proc/net/nf_conntrack ] && [ "$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)" -le 4000 ] 2>/dev/null; then
             echo "  connections per device: total, DNS, UDP, ip, mac"
             awk '{s = ""; d = ""; for (i = 1; i <= NF; i++) {if (s == "" && $i ~ /^src=/) s = substr($i, 5); if (d == "" && $i ~ /^dport=/) d = substr($i, 7)}
                   t[s]++; if (d == 53) n[s]++; if ($3 == "udp") u[s]++}
@@ -405,24 +410,39 @@ mg_blackbox() {  # $1 = free kB, $2 = load, $3 = note
 
 # The PID file survives a crash on the USB drive; after a reboot that PID may belong to another
 # process, so check the command line, not just that the PID exists.
-dnslim_rules() {  # $1 = iptables|ip6tables → the rule text. Old firmware has connlimit, but no hashlimit in its iptables
+DNSLIM_CH=TTDNSLIM
+dnslim_drop() {  # $1 = iptables|ip6tables → the limit rule inside the chain (old firmware has connlimit, not hashlimit)
     [ "$1" = ip6tables ] && m=128 || m=32
-    echo "-i $DNSLIM_IF -p udp --dport 53 -m connlimit --connlimit-above $DNSLIM_MAX --connlimit-mask $m -j DROP"
+    echo "-m connlimit --connlimit-above $DNSLIM_MAX --connlimit-mask $m -j DROP"
 }
-dnslim_remove() {  # takes our rules out whatever limit they were made with
+dnslim_jump() { echo "-i $DNSLIM_IF -p udp --dport 53 -j $DNSLIM_CH"; }
+dnslim_present() {  # the jump and the limit with the current number are in the IPv4 firewall
+    iptables -w -C INPUT $(dnslim_jump) 2>/dev/null && iptables -w -C $DNSLIM_CH $(dnslim_drop iptables) 2>/dev/null
+}
+dnslim_remove() {  # takes our rules out, whatever limit they were made with (also the direct rules of early 2.3.5 builds)
     for T in iptables ip6tables; do
         command -v $T >/dev/null 2>&1 || continue
-        $T -w -S INPUT 2>/dev/null | grep -- '--dport 53 -m connlimit' | sed 's/^-A /-D /' | while read -r r; do eval "$T -w $r" 2>/dev/null; done
+        $T -w -S INPUT 2>/dev/null | grep -e "-j $DNSLIM_CH\$" -e '--dport 53 -m connlimit' | sed 's/^-A /-D /' | while read -r r; do eval "$T -w $r" 2>/dev/null; done
+        $T -w -F $DNSLIM_CH 2>/dev/null; $T -w -X $DNSLIM_CH 2>/dev/null
     done
 }
 dnslim_apply() {  # silent drop of a device's DNS requests beyond DNSLIM_MAX open ones: a DNS storm cannot eat the router any more
     [ "$DNSLIM_MAX" -gt 0 ] 2>/dev/null || return 0
+    command -v iptables >/dev/null 2>&1 || return 0
+    dnslim_present && return 0   # rebuilding a working chain would reset what connlimit counts
+    dnslim_remove
     for T in iptables ip6tables; do
         command -v $T >/dev/null 2>&1 || continue
-        r=$(dnslim_rules $T)
-        $T -w -C INPUT $r 2>/dev/null || $T -w -I INPUT 1 $r 2>/dev/null
+        $T -w -N $DNSLIM_CH 2>/dev/null || continue
+        for x in $DNSLIM_EXEMPT; do
+            case "$x" in *:*) [ $T = ip6tables ] || continue ;; *) [ $T = iptables ] || continue ;; esac
+            $T -w -A $DNSLIM_CH -s "$x" -j RETURN 2>/dev/null
+        done
+        $T -w -A $DNSLIM_CH $(dnslim_drop $T) 2>/dev/null
+        $T -w -I INPUT 1 $(dnslim_jump) 2>/dev/null
     done
 }
+dnslim_dropped() { iptables -w -L $DNSLIM_CH -v -n -x 2>/dev/null | awk '$3 == "DROP" {n += $1} END {print n + 0}'; }
 mg_running() { p=$(cat "$MEMGUARD_PID" 2>/dev/null); [ -n "$p" ] && grep -q memguard-run "/proc/$p/cmdline" 2>/dev/null; }
 mlog() { mkdir -p "$(dirname "$MEMGUARD_LOG")"; echo "$(ts) $*" >> "$MEMGUARD_LOG"; logger -t tt-memguard "$*" 2>/dev/null; }
 
@@ -447,7 +467,7 @@ cmd_memguard_run() {
     trap '[ "$(cat "$MEMGUARD_PID" 2>/dev/null)" = "$$" ] && rm -f "$MEMGUARD_PID"; exit 0' TERM INT
     mlog "started: threshold ${MEMGUARD_LOW_KB} kB, now free $(mem_avail) kB"
     [ -f "$MEMGUARD_UDPT" ] && { cat "$MEMGUARD_UDPT" > "$UDP_TIMEOUT_FILE"; rm -f "$MEMGUARD_UDPT"; }   # restore after a crash
-    hot=0; braked=0; boxed=0; bchk=0; bloated=0; dchk=0
+    hot=0; braked=0; boxed=0; bchk=0; bloated=0; dchk=0; bgap=$MEMGUARD_BLOAT_GAP
     # Less swapping: under zram a swapped page still costs RAM and CPU; only ever lower the value
     if [ "$MEMGUARD_SWAPPINESS" -gt 0 ] 2>/dev/null && [ -w "$SWAPPINESS_FILE" ]; then
         s=$(cat "$SWAPPINESS_FILE" 2>/dev/null)
@@ -504,9 +524,11 @@ cmd_memguard_run() {
             now=$(date +%s)
             if [ $((now - bchk)) -ge 30 ]; then
                 bchk=$now; r=$(client_rss)
-                if [ -n "$r" ] && [ "$r" -gt "$MEMGUARD_BLOAT_KB" ] && [ $((now - bloated)) -ge "$MEMGUARD_BLOAT_GAP" ]; then
+                if [ -n "$r" ] && [ "$r" -gt "$MEMGUARD_BLOAT_KB" ] && [ $((now - bloated)) -ge "$bgap" ]; then
                     mlog "restarting the client early: it grew to ${r} kB (RAM + swap), limit ${MEMGUARD_BLOAT_KB} kB, free $(mem_avail) kB"
                     "$MG_TARGET" reload >/dev/null 2>&1; bloated=$now
+                    # a client that is simply big on this router must not be restarted every half hour forever
+                    [ "$bgap" -lt 14400 ] && bgap=$((bgap * 2))
                 fi
             fi
         fi
@@ -516,9 +538,9 @@ cmd_memguard_run() {
             now=$(date +%s)
             if [ $((now - dchk)) -ge 60 ]; then
                 dchk=$now
-                if command -v iptables >/dev/null 2>&1 && ! iptables -w -C INPUT $(dnslim_rules iptables) 2>/dev/null; then
+                if command -v iptables >/dev/null 2>&1 && ! dnslim_present; then
                     dnslim_apply
-                    iptables -w -C INPUT $(dnslim_rules iptables) 2>/dev/null && mlog "DNS limit was missing from the firewall - put it back"
+                    dnslim_present && mlog "DNS limit was missing from the firewall - put it back"
                 fi
             fi
         fi
@@ -549,7 +571,8 @@ cmd_memguard() {  # $1 = on|off|status, $2 = threshold kB (optional, with on)
 # tt-stats memory guard: restarts the TrustTunnel client when free memory runs out,
 # instead of letting a 128 MB router hang. Managed by: tt-stats memguard on|off
 case "\$1" in
-    start|restart) $SELF memguard-start ;;
+    start)   $SELF memguard-start ;;
+    restart) $SELF memguard-stop; $SELF memguard-start ;;
     stop)          $SELF memguard-stop ;;
 esac
 exit 0
@@ -584,8 +607,11 @@ EOF
             if [ -x "$MEMGUARD_INIT" ]; then echo "Memory guard: on (threshold ${MEMGUARD_LOW_KB} kB, pause below ${MEMGUARD_CRIT_KB} kB, small client < ${MEMGUARD_SMALL_KB} kB)$(mg_running && echo ', running' || echo ', NOT running')"
                 if [ -x "$MEMGUARD_CRON" ] && [ "$MEMGUARD_NIGHT_KB" -gt 0 ] 2>/dev/null; then echo "Nightly restart: if the client is above ${MEMGUARD_NIGHT_KB} kB"; else echo "Nightly restart: off"; fi
                 if [ "$MEMGUARD_LOAD" -gt 0 ] 2>/dev/null; then echo "Overload brake: load >= ${MEMGUARD_LOAD} and free < $((MEMGUARD_LOW_KB * 3 / 2)) kB for 2 minutes"; else echo "Overload brake: off"; fi
-                if [ "$MEMGUARD_BLOAT_KB" -gt 0 ] 2>/dev/null; then echo "Early restart: client above ${MEMGUARD_BLOAT_KB} kB (RAM + swap), at most once per $((MEMGUARD_BLOAT_GAP / 60)) minutes"; else echo "Early restart: off"; fi
-                if [ "$DNSLIM_MAX" -gt 0 ] 2>/dev/null; then echo "DNS limit: ${DNSLIM_MAX} open requests per device$(iptables -w -S INPUT 2>/dev/null | grep -q -- '--dport 53 -m connlimit' || echo ' (rule NOT in the firewall)')"; else echo "DNS limit: off"; fi
+                if [ "$MEMGUARD_BLOAT_KB" -gt 0 ] 2>/dev/null; then echo "Early restart: client above ${MEMGUARD_BLOAT_KB} kB (RAM + swap), at most once per $((MEMGUARD_BLOAT_GAP / 60)) minutes (the gap doubles after each one, up to 4 hours)"; else echo "Early restart: off"; fi
+                if [ "$DNSLIM_MAX" -gt 0 ] 2>/dev/null; then
+                    if dnslim_present; then echo "DNS limit: ${DNSLIM_MAX} open requests per device, dropped so far: $(dnslim_dropped)${DNSLIM_EXEMPT:+; without the limit: $DNSLIM_EXEMPT}"
+                    else echo "DNS limit: ${DNSLIM_MAX} open requests per device (rule NOT in the firewall)"; fi
+                else echo "DNS limit: off"; fi
                 echo "Swappiness: $(cat "$SWAPPINESS_FILE" 2>/dev/null)"
                 [ -f "$MEMGUARD_UDPT" ] && echo "Brake is on now: UDP conntrack timeout 5 s (back to $(cat "$MEMGUARD_UDPT") s within 10 minutes)"
             else echo "Memory guard: off — enable: tt-stats memguard on"; fi
@@ -605,8 +631,8 @@ cmd_disable() {  # $1 = reason
     cp "$BACKUP_DIR/S99trusttunnel" "$INIT_SCRIPT" && chmod +x "$INIT_SCRIPT"
     cp "$BACKUP_DIR/trusttunnel_client.toml" "$CONFIG_FILE"
     cp "$BACKUP_DIR/mode.conf" "$MODE_CONF"
-    [ -f "$BACKUP_DIR/010-trusttunnel.sh" ] && cp "$BACKUP_DIR/010-trusttunnel.sh" "$WAN_HOOK" && chmod +x "$WAN_HOOK"
-    if (cd / && md5sum -c "$BACKUP_DIR/MD5SUMS" >/dev/null 2>&1); then
+    # the WAN hook is not put back: the current one works in both modes and has the later fixes
+    if (cd / && grep -v '010-trusttunnel.sh' "$BACKUP_DIR/MD5SUMS" | md5sum -c >/dev/null 2>&1); then
         say "Backup files restored (checksums OK)"
     else
         say "WARNING: restored files do not match the backup checksums"

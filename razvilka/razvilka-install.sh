@@ -188,7 +188,7 @@ done
 # but the bot shows and edits only $GROUP — offer to merge them (a real router had four such lists)
 RCF=/tmp/razvilka-rc.$$; trap 'rm -f $RCF $RCF.new $RCF.c $RCF.new.c' EXIT; trap 'exit 1' INT TERM HUP   # a copy of the router settings: never left behind
 if [ -z "$R" ]; then ndmc -c 'show running-config' > $RCF 2>/dev/null; else cp "$R/tmp/running-config.txt" $RCF 2>/dev/null || : > $RCF; fi
-rcclean() { awk '{gsub(/\033\[K/, ""); print}' "$1" > "$1.c" && mv "$1.c" "$1"; }   # ndmc puts terminal codes into its output
+rcclean() { awk '{gsub(/\033\[[0-9;]*[A-Za-z]/, ""); gsub(/\r/, ""); print}' "$1" > "$1.c" && mv "$1.c" "$1"; }   # ndmc puts terminal codes into its output
 rcclean $RCF
 GRP_EXISTS=0; grep -q "^object-group fqdn $GROUP\$" $RCF && GRP_EXISTS=1
 [ $GRP_EXISTS = 1 ] && okm "$(L 'Группа сайтов' 'Site group') $GROUP $(L 'уже есть в прошивке' 'already exists in firmware')"
@@ -382,9 +382,9 @@ if [ $MERGE = 1 ]; then
       wrn "$(L 'Список' 'List') «$g»: $miss $(L 'сайтов не встали в' 'sites did not go into') $GROUP — $(L 'старый список оставляю как есть' 'the old list stays as it is')"; continue
     fi
     while read -r d; do grep -qxF "$d" "$R$ETC/sites" 2>/dev/null || echo "$d" >> "$R$ETC/sites"; done < "$R$BK/merged_$g.txt"
+    note "merged $g $WAN_NDM $BK/merged_$g.txt $tail"   # first the record, then the change: an interrupted run can still be undone
     sys "ndmc -c 'no dns-proxy route object-group $g $WAN_NDM' >/dev/null"
     sys "ndmc -c 'no object-group fqdn $g' >/dev/null"
-    note "merged $g $WAN_NDM $BK/merged_$g.txt $tail"
     okm "$(L 'Список' 'List') «$g» → $GROUP: $(wc -l < "$R$BK/merged_$g.txt")"
   done
   sys "ndmc -c 'system configuration save' >/dev/null"
