@@ -374,17 +374,20 @@ if [ $MERGE = 1 ]; then
     # every site must be in $GROUP before the old list goes (a full group or a rejected entry would lose it)
     miss=0
     if [ -z "$R" ]; then ndmc -c 'show running-config' > $RCF.new 2>/dev/null; rcclean $RCF.new
-      while read -r d; do awk -v g="$GROUP" -v d="$d" '/^object-group fqdn / {cur = $3; next} /^[^ ]/ {cur = ""} cur == g && $1 == "include" && $2 == d {f = 1} END {exit !f}' $RCF.new || miss=$((miss + 1)); done < "$R$BK/merged_$g.txt"
-      rm -f $RCF.new
+      # in $GROUP and not excluded there (an exclude would cancel the include)
+      while read -r d; do awk -v g="$GROUP" -v d="$d" '/^object-group fqdn / {cur = $3; next} /^[^ ]/ {cur = ""} cur == g && $2 == d {if ($1 == "include") f = 1; if ($1 == "exclude") x = 1} END {exit !(f && !x)}' $RCF.new || miss=$((miss + 1)); done < "$R$BK/merged_$g.txt"
     fi
     if [ $miss -gt 0 ]; then
       while read -r d; do sys "ndmc -c 'no object-group fqdn $GROUP include $d' >/dev/null"; done < "$R$BK/merged_$g.added"
+      rm -f $RCF.new
       wrn "$(L 'Список' 'List') «$g»: $miss $(L 'сайтов не встали в' 'sites did not go into') $GROUP — $(L 'старый список оставляю как есть' 'the old list stays as it is')"; continue
     fi
     while read -r d; do grep -qxF "$d" "$R$ETC/sites" 2>/dev/null || echo "$d" >> "$R$ETC/sites"; done < "$R$BK/merged_$g.txt"
     note "merged $g $WAN_NDM $BK/merged_$g.txt $tail"   # first the record, then the change: an interrupted run can still be undone
     sys "ndmc -c 'no dns-proxy route object-group $g $WAN_NDM' >/dev/null"
     sys "ndmc -c 'no object-group fqdn $g' >/dev/null"
+    # the next list compares with the group as it is now: a site shared by two lists belongs to the first one
+    [ -f $RCF.new ] && mv $RCF.new $RCF
     okm "$(L 'Список' 'List') «$g» → $GROUP: $(wc -l < "$R$BK/merged_$g.txt")"
   done
   sys "ndmc -c 'system configuration save' >/dev/null"

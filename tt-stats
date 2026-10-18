@@ -416,13 +416,21 @@ dnslim_drop() {  # $1 = iptables|ip6tables → the limit rule inside the chain (
     echo "-m connlimit --connlimit-above $DNSLIM_MAX --connlimit-mask $m -j DROP"
 }
 dnslim_jump() { echo "-i $DNSLIM_IF -p udp --dport 53 -j $DNSLIM_CH"; }
-dnslim_present() {  # the jump and the limit with the current number are in the IPv4 firewall
-    iptables -w -C INPUT $(dnslim_jump) 2>/dev/null && iptables -w -C $DNSLIM_CH $(dnslim_drop iptables) 2>/dev/null
+dnslim_exempts() {  # $1 = iptables|ip6tables → the exempt addresses of this family
+    for x in $DNSLIM_EXEMPT; do case "$x" in *:*) [ "$1" = ip6tables ] && echo "$x" ;; *) [ "$1" = iptables ] && echo "$x" ;; esac; done
 }
-dnslim_remove() {  # takes our rules out, whatever limit they were made with (also the direct rules of early 2.3.5 builds)
+dnslim_present() {  # in every family: the jump, the limit with the current number and exactly the current exemptions
     for T in iptables ip6tables; do
         command -v $T >/dev/null 2>&1 || continue
-        $T -w -S INPUT 2>/dev/null | grep -e "-j $DNSLIM_CH\$" -e '--dport 53 -m connlimit' | sed 's/^-A /-D /' | while read -r r; do eval "$T -w $r" 2>/dev/null; done
+        $T -w -C INPUT $(dnslim_jump) 2>/dev/null && $T -w -C $DNSLIM_CH $(dnslim_drop $T) 2>/dev/null || return 1
+        for x in $(dnslim_exempts $T); do $T -w -C $DNSLIM_CH -s "$x" -j RETURN 2>/dev/null || return 1; done
+        [ "$($T -w -S $DNSLIM_CH 2>/dev/null | grep -c '^-A ')" -eq $(( $(dnslim_exempts $T | wc -l) + 1 )) ] || return 1
+    done
+}
+dnslim_remove() {  # takes our chain out, whatever limit and exemptions it was made with
+    for T in iptables ip6tables; do
+        command -v $T >/dev/null 2>&1 || continue
+        $T -w -S INPUT 2>/dev/null | grep -e "-j $DNSLIM_CH\$" | sed 's/^-A /-D /' | while read -r r; do eval "$T -w $r" 2>/dev/null; done
         $T -w -F $DNSLIM_CH 2>/dev/null; $T -w -X $DNSLIM_CH 2>/dev/null
     done
 }
@@ -434,10 +442,7 @@ dnslim_apply() {  # silent drop of a device's DNS requests beyond DNSLIM_MAX ope
     for T in iptables ip6tables; do
         command -v $T >/dev/null 2>&1 || continue
         $T -w -N $DNSLIM_CH 2>/dev/null || continue
-        for x in $DNSLIM_EXEMPT; do
-            case "$x" in *:*) [ $T = ip6tables ] || continue ;; *) [ $T = iptables ] || continue ;; esac
-            $T -w -A $DNSLIM_CH -s "$x" -j RETURN 2>/dev/null
-        done
+        for x in $(dnslim_exempts $T); do $T -w -A $DNSLIM_CH -s "$x" -j RETURN 2>/dev/null; done
         $T -w -A $DNSLIM_CH $(dnslim_drop $T) 2>/dev/null
         $T -w -I INPUT 1 $(dnslim_jump) 2>/dev/null
     done

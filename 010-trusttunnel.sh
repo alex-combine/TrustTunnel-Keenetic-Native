@@ -38,13 +38,15 @@ fi
 # during a check is not lost: it leaves a mark, and the running check looks once more when it is done.
 LOCK=/tmp/tt-wan-hook.lock
 if ! mkdir "$LOCK" 2>/dev/null; then
-    lts=$(cat "$LOCK/ts" 2>/dev/null)
-    # a lock older than 3 minutes was left by a killed copy (a check takes about a minute)
+    # the lock time, or the folder's own time if the holder was killed before writing it
+    lts=$(cat "$LOCK/ts" 2>/dev/null); [ -n "$lts" ] || lts=$(date -r "$LOCK" +%s 2>/dev/null)
+    # a lock older than 3 minutes was left by a killed copy: a check takes about a minute
     if ! { [ -n "$lts" ] && [ $(( $(date +%s) - lts )) -gt 180 ] 2>/dev/null && rm -rf "$LOCK" && mkdir "$LOCK" 2>/dev/null; }; then
         touch "$LOCK/pending" 2>/dev/null
         logger -t "$LOG_TAG" "WAN event (${1:-?}): another check is running, it will look again"; exit 0
     fi
 fi
+date +%s > "$LOCK/ts"
 trap 'rm -rf "$LOCK"' EXIT
 
 START_TS_FILE="/opt/var/run/trusttunnel_start_ts"
