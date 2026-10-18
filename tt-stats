@@ -329,7 +329,9 @@ upd_status_line() {  # uses the cached result; checks again if it is older than 
 # eats the memory and a restart would only break connections.
 
 mem_avail() { awk '/MemAvailable/ {print $2; exit}' /proc/meminfo; }
-client_rss() { p=$(pidof trusttunnel_client | cut -d' ' -f1); [ -n "$p" ] && awk '/VmRSS/ {print $2}' "/proc/$p/status"; }
+# The client's memory: RAM plus swap. Under zram a bloated client is pushed out to swap and looks tiny
+# by RSS alone (a real night: 0.7 MB in RAM, 21 MB in swap, and the VPN stood still).
+client_rss() { p=$(pidof trusttunnel_client | cut -d' ' -f1); [ -n "$p" ] && awk '/^VmRSS:/ {r = $2} /^VmSwap:/ {w = $2} END {if (r != "") print r + w}' "/proc/$p/status"; }
 load1() { cut -d' ' -f1 "${LOADAVG_FILE:-/proc/loadavg}" | cut -d. -f1; }   # file overridable for tests
 
 # Overload brake. When the VPN drops, devices behind a kill switch retry DNS without a pause:
@@ -433,7 +435,8 @@ cmd_memguard_run() {
         fi
         if [ "$MEMGUARD_LOAD" -gt 0 ] 2>/dev/null; then
             l=$(load1); now=$(date +%s)
-            if [ "${a:-999999}" -lt "$MEMGUARD_LOW_KB" ] && [ "${l:-0}" -ge "$MEMGUARD_LOAD" ]; then
+            # 1.5x the threshold: free memory jumps around under a storm (14 -> 16 MB) and must not reset the count
+            if [ "${a:-999999}" -lt $((MEMGUARD_LOW_KB * 3 / 2)) ] && [ "${l:-0}" -ge "$MEMGUARD_LOAD" ]; then
                 [ "$hot" = 0 ] && hot=$now
                 if [ $((now - hot)) -ge 120 ] && [ $((now - braked)) -ge 600 ]; then
                     mg_brake "$l" "$a"; braked=$now
@@ -517,10 +520,10 @@ EOF
         *)
             if [ -x "$MEMGUARD_INIT" ]; then echo "Memory guard: on (threshold ${MEMGUARD_LOW_KB} kB, pause below ${MEMGUARD_CRIT_KB} kB, small client < ${MEMGUARD_SMALL_KB} kB)$(mg_running && echo ', running' || echo ', NOT running')"
                 if [ -x "$MEMGUARD_CRON" ] && [ "$MEMGUARD_NIGHT_KB" -gt 0 ] 2>/dev/null; then echo "Nightly restart: if the client is above ${MEMGUARD_NIGHT_KB} kB"; else echo "Nightly restart: off"; fi
-                if [ "$MEMGUARD_LOAD" -gt 0 ] 2>/dev/null; then echo "Overload brake: load >= ${MEMGUARD_LOAD} and free < ${MEMGUARD_LOW_KB} kB for 2 minutes"; else echo "Overload brake: off"; fi
+                if [ "$MEMGUARD_LOAD" -gt 0 ] 2>/dev/null; then echo "Overload brake: load >= ${MEMGUARD_LOAD} and free < $((MEMGUARD_LOW_KB * 3 / 2)) kB for 2 minutes"; else echo "Overload brake: off"; fi
                 [ -f "$MEMGUARD_UDPT" ] && echo "Brake is on now: UDP conntrack timeout 5 s (back to $(cat "$MEMGUARD_UDPT") s within 10 minutes)"
             else echo "Memory guard: off — enable: tt-stats memguard on"; fi
-            echo "Free memory:  $(mem_avail) kB; client: $(client_rss) kB"
+            echo "Free memory:  $(mem_avail) kB; client: $(client_rss) kB (RAM + swap)"
             [ -f "$MEMGUARD_PAUSE" ] && echo "VPN is paused by the guard (starts again within 15 minutes)"
             [ -f "$MEMGUARD_LOG" ] && { echo "Last events:"; tail -n 5 "$MEMGUARD_LOG"; }
             [ -s "$MEMGUARD_BOX" ] && echo "Black box (who used memory and connections): $(grep -c '^[0-9]' "$MEMGUARD_BOX") snapshots, last $(grep '^[0-9]' "$MEMGUARD_BOX" | tail -1 | cut -c1-19) — $MEMGUARD_BOX"

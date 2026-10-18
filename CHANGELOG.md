@@ -13,6 +13,14 @@
   `tt-stats memguard` shows how many snapshots there are. The file is rotated at 500 kB.
   `MEMGUARD_BOX_LOAD=0` in `mode.conf` turns it off.
 
+- **Fix: the guard counts the client as RAM plus swap.** A real night: a heavy download through the VPN, the
+  kernel pushed the client out to zram (0.7 MB in RAM, 21 MB in swap), the VPN stood still, and the guard
+  logged "the client is small, something else eats the memory" instead of restarting it. The nightly
+  restart and `tt-stats memguard` use the same number now.
+- **Fix: the overload brake is not reset by jumps of free memory.** It now fires on a load of `MEMGUARD_LOAD`
+  for 2 minutes while free memory is below 1.5× the threshold (was: below the threshold). That night free
+  memory jumped 14 → 16 MB, the 2-minute count started over each time, and the load went up to 39.
+
 ## v2.3.4 — memory guard: default threshold 15000 kB
 
 - `tt-stats memguard on` without a number now uses **15000 kB** instead of 10000 kB. On a 128 MB router
