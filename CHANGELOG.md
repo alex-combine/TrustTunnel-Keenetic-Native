@@ -16,13 +16,15 @@ storm of 1000 DNS requests from one device.
   kernel warnings (OOM kills, full conntrack table). No `ndmc` calls, about a second of work. The file is rotated
   at 500 kB. `MEMGUARD_BOX_LOAD=0` in `mode.conf` turns it off.
 - **Early restart.** A client that has grown past `MEMGUARD_BLOAT_KB` (25000 kB, RAM plus swap) is restarted
-  without waiting for free memory to run out; at most once per `MEMGUARD_BLOAT_GAP` (30 minutes). `0` turns it off.
+  without waiting for free memory to run out; at most once per `MEMGUARD_BLOAT_GAP` (30 minutes); the gap doubles after each restart, up to 4 hours,
+  so a client that is simply big on a router is not restarted every half hour. `0` turns it off.
 - **DNS limit per device.** One device may have at most `DNSLIM_MAX` (120) open DNS requests at the router; the
   rest are dropped silently and the device simply repeats them. Normal devices have 5–40, a storm 200–300. It
   uses `connlimit` (the `hashlimit` match is missing in the iptables of older firmware), IPv4 and IPv6. A hook in
   `netfilter.d` puts it back after the firmware rebuilds the filter table, and the guard checks it once a minute
   (after one reboot the router was left without it). `0` turns it off. A second router in router mode behind
-  this one counts as one device for its whole network: raise `DNSLIM_MAX` for it.
+  this one counts as one device for its whole network: raise `DNSLIM_MAX`, or list it (or a Pi-hole/AdGuard on a NAS)
+  in `DNSLIM_EXEMPT`. `tt-stats memguard` shows how many requests were dropped.
 - **Less swapping.** The guard lowers `vm.swappiness` to `MEMGUARD_SWAPPINESS` (10) when it starts; it is never
   raised.
 - **Fix: the client is counted as RAM plus swap.** A real night: a heavy download through the VPN, the kernel
@@ -37,8 +39,11 @@ storm of 1000 DNS requests from one device.
 
 ### WAN hook
 
-- **Link down events are ignored** (the VPN is checked when a link comes up), and the checks run in the
-  background so the firmware does not wait for them.
+- **Checks run in the background, one at a time.** The firmware does not wait for them; an event that comes
+  during a check is not lost — the check looks once more. Link-down events are checked too (on a hot-standby
+  failover only the main link's "down" arrives), and a VPN that still passes data is never reloaded. A service
+  that was stopped meanwhile (the memory guard pause, a manual stop, an update) is not started again.
+- **An update restarts the memory guard with the new code** (before, the old guard kept running until a reboot).
 - **No needless restarts.** A WAN event (any interface going up) used to reload the client. A real day: the
   backup 4G modem reconnected, the VPN on the main link was fine, and it was cut for 11 s anyway. Now the hook
   first checks whether the VPN still passes data and reloads only if it does not.
