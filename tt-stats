@@ -71,25 +71,32 @@ HC_TARGET_URL="http://connectivitycheck.gstatic.com/generate_204"
 # shellcheck source=/dev/null
 [ -f "$MODE_CONF" ] && . "$MODE_CONF"
 TUN_IDX="${TUN_IDX:-0}"
-MEMGUARD_LOW_KB="${MEMGUARD_LOW_KB:-15000}"
-MEMGUARD_CRIT_KB="${MEMGUARD_CRIT_KB:-$((MEMGUARD_LOW_KB * 2 / 3))}"   # pause the VPN only below this
+# Memory guard defaults follow the router's memory: tight ones are needed only on 128 MB.
+# A value set in mode.conf (or by "tt-stats memguard on KB") always wins.
+MEM_TOTAL_KB=$(awk '/^MemTotal:/ {print $2; exit}' "${MEMINFO_FILE:-/proc/meminfo}" 2>/dev/null)
+if [ "${MEM_TOTAL_KB:-0}" -ge 400000 ] 2>/dev/null; then MG_TIER=512; d_low=40000; d_bloat=60000; d_dns=300; d_swp=0; d_night=0
+elif [ "${MEM_TOTAL_KB:-0}" -ge 180000 ] 2>/dev/null; then MG_TIER=256; d_low=25000; d_bloat=40000; d_dns=200; d_swp=10; d_night=20000
+else MG_TIER=128; d_low=15000; d_bloat=25000; d_dns=120; d_swp=10; d_night=12000; fi
+numor() { case "$1" in ''|*[!0-9]*) echo "$2" ;; *) echo "$1" ;; esac; }   # a typo in mode.conf falls back to the default
+MEMGUARD_LOW_KB=$(numor "$MEMGUARD_LOW_KB" $d_low)
+MEMGUARD_CRIT_KB=$(numor "$MEMGUARD_CRIT_KB" $((MEMGUARD_LOW_KB * 2 / 3)))   # pause the VPN only below this
 MEMGUARD_SMALL_KB="${MEMGUARD_SMALL_KB:-5000}"   # client smaller than this: memory is eaten by something else
-MEMGUARD_NIGHT_KB="${MEMGUARD_NIGHT_KB:-12000}"  # nightly restart if the client is bigger (0 = off)
+MEMGUARD_NIGHT_KB="${MEMGUARD_NIGHT_KB:-$d_night}"  # nightly restart if the client is bigger (0 = off)
 MEMGUARD_LOAD="${MEMGUARD_LOAD:-20}"             # overload brake: load average at or above this (0 = off)
 MEMGUARD_SHED="${MEMGUARD_SHED:-geo-build.sh}"   # heavy optional jobs to stop under overload
 MEMGUARD_BOX_LOAD="${MEMGUARD_BOX_LOAD:-8}"     # black box: a snapshot a minute from this load (0 = off)
-MEMGUARD_BLOAT_KB="${MEMGUARD_BLOAT_KB:-25000}"  # restart a client that grew past this (RAM + swap) without waiting for low memory (0 = off)
+MEMGUARD_BLOAT_KB="${MEMGUARD_BLOAT_KB:-$d_bloat}"  # restart a client that grew past this (RAM + swap) without waiting for low memory (0 = off)
 MEMGUARD_BLOAT_GAP="${MEMGUARD_BLOAT_GAP:-1800}" # ...but not more often than once per this many seconds
-MEMGUARD_SWAPPINESS="${MEMGUARD_SWAPPINESS:-10}" # how eagerly the kernel pushes memory to swap (it is only ever lowered; 0 = leave as is)
+MEMGUARD_SWAPPINESS="${MEMGUARD_SWAPPINESS:-$d_swp}" # how eagerly the kernel pushes memory to swap (it is only ever lowered; 0 = leave as is)
 SWAPPINESS_FILE="${SWAPPINESS_FILE:-/proc/sys/vm/swappiness}"
-DNSLIM_MAX="${DNSLIM_MAX:-120}"                  # DNS requests one device may have open at the router (they live ~30 s; normal is 5-40, a storm 200-300; 0 = off)
+DNSLIM_MAX="${DNSLIM_MAX:-$d_dns}"                  # DNS requests one device may have open at the router (they live ~30 s; normal is 5-40, a storm 200-300; 0 = off)
 DNSLIM_HOOK="${DNSLIM_HOOK:-/opt/etc/ndm/netfilter.d/58-tt-dnslimit.sh}"
 DNSLIM_IF="${DNSLIM_IF:-br+}"                    # LAN bridges
 DNSLIM_EXEMPT="${DNSLIM_EXEMPT:-}"               # addresses without the limit: a second router, Pi-hole/AdGuard on a NAS (space-separated, IPv4/IPv6)
-numor() { case "$1" in ''|*[!0-9]*) echo "$2" ;; *) echo "$1" ;; esac; }   # a typo in mode.conf falls back to the default
-MEMGUARD_BLOAT_KB=$(numor "$MEMGUARD_BLOAT_KB" 25000); MEMGUARD_BLOAT_GAP=$(numor "$MEMGUARD_BLOAT_GAP" 1800)
-MEMGUARD_SWAPPINESS=$(numor "$MEMGUARD_SWAPPINESS" 10); MEMGUARD_BOX_LOAD=$(numor "$MEMGUARD_BOX_LOAD" 8)
-MEMGUARD_LOAD=$(numor "$MEMGUARD_LOAD" 20); DNSLIM_MAX=$(numor "$DNSLIM_MAX" 120)
+MEMGUARD_BLOAT_KB=$(numor "$MEMGUARD_BLOAT_KB" $d_bloat); MEMGUARD_BLOAT_GAP=$(numor "$MEMGUARD_BLOAT_GAP" 1800)
+MEMGUARD_SWAPPINESS=$(numor "$MEMGUARD_SWAPPINESS" $d_swp); MEMGUARD_BOX_LOAD=$(numor "$MEMGUARD_BOX_LOAD" 8)
+MEMGUARD_LOAD=$(numor "$MEMGUARD_LOAD" 20); DNSLIM_MAX=$(numor "$DNSLIM_MAX" $d_dns)
+MEMGUARD_NIGHT_KB=$(numor "$MEMGUARD_NIGHT_KB" $d_night)
 OPKG_IFACE="opkgtun${TUN_IDX}"
 NDM_IFACE="OpkgTun${TUN_IDX}"
 
@@ -609,6 +616,7 @@ EOF
             say "Memory guard is off"
             ;;
         *)
+            echo "Router memory: $((${MEM_TOTAL_KB:-0} / 1024)) MB — defaults for ${MG_TIER} MB routers (values in mode.conf win)"
             if [ -x "$MEMGUARD_INIT" ]; then echo "Memory guard: on (threshold ${MEMGUARD_LOW_KB} kB, pause below ${MEMGUARD_CRIT_KB} kB, small client < ${MEMGUARD_SMALL_KB} kB)$(mg_running && echo ', running' || echo ', NOT running')"
                 if [ -x "$MEMGUARD_CRON" ] && [ "$MEMGUARD_NIGHT_KB" -gt 0 ] 2>/dev/null; then echo "Nightly restart: if the client is above ${MEMGUARD_NIGHT_KB} kB"; else echo "Nightly restart: off"; fi
                 if [ "$MEMGUARD_LOAD" -gt 0 ] 2>/dev/null; then echo "Overload brake: load >= ${MEMGUARD_LOAD} and free < $((MEMGUARD_LOW_KB * 3 / 2)) kB for 2 minutes"; else echo "Overload brake: off"; fi

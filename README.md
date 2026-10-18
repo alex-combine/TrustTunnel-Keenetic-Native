@@ -412,11 +412,19 @@ Put `killswitch_enabled = true` at the top of `trusttunnel_client.toml`. With `f
 On routers with 128 MB of RAM a long fast download through the tunnel can exhaust memory, and the router hangs (see [troubleshooting](#the-router-hangs-or-reboots-during-big-downloads-through-the-vpn)). The memory guard prevents that:
 
 ```bash
-tt-stats memguard on          # enable (threshold 15000 kB of free memory)
+tt-stats memguard on          # enable (the threshold depends on the router memory, see below)
 tt-stats memguard on 20000    # enable with your own threshold, kB
 tt-stats memguard             # state, free memory, last events
 tt-stats memguard off         # disable
 ```
+
+**Defaults follow the router memory** — tight ones are needed only on 128 MB. A value in `mode.conf` (or `tt-stats memguard on KB`) always wins; `tt-stats memguard` shows which set is used.
+
+| Router memory | Low-memory threshold | Early restart | DNS limit | Swappiness | Nightly restart |
+|---|---|---|---|---|---|
+| 128 MB | 15000 kB | 25000 kB | 120 | 10 | above 12000 kB |
+| 256 MB | 25000 kB | 40000 kB | 200 | 10 | above 20000 kB |
+| 512 MB and more | 40000 kB | 60000 kB | 300 | not changed | off |
 
 Every 5 seconds the guard checks free memory (`MemAvailable`). Below the threshold it restarts only the TrustTunnel client: that frees the client's buffers, the tunnel reconnects in a few seconds. If this happens 3 times within 10 minutes, it stops the VPN for 15 minutes and then starts it again — a short outage is better than a hung router. With a kill switch, devices that may use only the VPN have no internet during the pause. Autostart: `/opt/etc/init.d/S97tt-memguard`, log: `/opt/var/log/tt-memguard.log`.
 

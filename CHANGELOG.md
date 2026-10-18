@@ -8,6 +8,10 @@ storm of 1000 DNS requests from one device.
 
 ### Memory guard (`tt-stats memguard`)
 
+- **Defaults follow the router memory.** The tight values are needed only on 128 MB; 256 MB and 512 MB routers get
+  looser ones (low-memory threshold 15000 / 25000 / 40000 kB, early restart 25000 / 40000 / 60000 kB, DNS limit
+  120 / 200 / 300; on 512 MB swappiness is left alone and the nightly restart is off). A value in `mode.conf` wins.
+
 - **Black box.** While free memory is below 1.5× the guard threshold or the load is `MEMGUARD_BOX_LOAD` (8) or
   more, the guard writes a snapshot once a minute to `/opt/var/log/tt-blackbox.log`, and once an hour a baseline
   of a normal state: free memory, load, swap, kernel memory (slab, cache) and `/tmp`; the processes that hold the
