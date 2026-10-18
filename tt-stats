@@ -352,19 +352,45 @@ mg_brake() {  # $1 = load, $2 = free kB
         ( sleep 600; cat "$MEMGUARD_UDPT" > "$UDP_TIMEOUT_FILE"; rm -f "$MEMGUARD_UDPT" ) </dev/null >/dev/null 2>&1 &
     fi
 }
-# Black box: who holds the memory and which devices hold the connections, so the next bad evening
-# can be explained afterwards. Called at most once a minute while memory is low or the load is high.
-mg_blackbox() {  # $1 = free kB, $2 = load
-    [ -f "$MEMGUARD_BOX" ] && [ "$(wc -c < "$MEMGUARD_BOX")" -gt 300000 ] && mv "$MEMGUARD_BOX" "$MEMGUARD_BOX.old"
+# Black box: everything needed to name the culprit of a bad evening afterwards — memory (RAM and swap:
+# under zram a big process looks small), kernel memory and /tmp, CPU, connections per device (DNS, UDP),
+# where the connections go, traffic per interface, kernel warnings. Once a minute while memory is low or the
+# load is high, plus once an hour as a baseline of a normal state. Light: no ndmc calls.
+MEMGUARD_BOX_NET="/tmp/tt-blackbox.net"   # interface counters of the previous snapshot
+mg_blackbox() {  # $1 = free kB, $2 = load, $3 = note
+    [ -f "$MEMGUARD_BOX" ] && [ "$(wc -c < "$MEMGUARD_BOX")" -gt 500000 ] && mv "$MEMGUARD_BOX" "$MEMGUARD_BOX.old"
+    # shellcheck disable=SC2016  # awk programs
     {
-        echo "$(ts) free $1 kB, load $2, swap used $(awk '/SwapTotal/ {t = $2} /SwapFree/ {f = $2} END {print t - f}' /proc/meminfo) kB, connections $(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null)"
-        # shellcheck disable=SC2016  # awk program
-        awk '/^Name:/ {n = $2} /^VmRSS:/ {print $2, n}' /proc/[0-9]*/status 2>/dev/null | sort -rn | head -5 |
-            awk '{printf "  memory      %6d kB  %s\n", $1, $2}'
-        [ -r /proc/net/nf_conntrack ] && awk '{for (i = 1; i <= NF; i++) if ($i ~ /^src=/) {print substr($i, 5); break}}' /proc/net/nf_conntrack |
-            sort | uniq -c | sort -rn | head -5 | while read -r c ip; do
-                printf '  connections %6d     %s %s\n' "$c" "$ip" "$(awk -v ip="$ip" '$1 == ip {print $4}' /proc/net/arp)"
-            done
+        echo "$(ts) $3free $1 kB, load $2, swap used $(awk '/SwapTotal/ {t = $2} /SwapFree/ {f = $2} END {print t - f}' /proc/meminfo) kB, connections $(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null), processes $(ls -d /proc/[0-9]* | wc -l)"
+        awk '/^(MemFree|Cached|Shmem|Slab|SUnreclaim):/ {sub(":", "", $1); printf " %s %s", $1, $2} END {print " kB"}' /proc/meminfo | sed 's/^/  kernel  /'
+        df /tmp 2>/dev/null | awk 'NR > 1 {print "  /tmp    " $3 " kB in RAM"}'
+        echo "  memory: RAM + swap, pid, name"
+        awk '/^Name:/ {n = $2; r = 0} /^Pid:/ {p = $2} /^VmRSS:/ {r = $2} /^VmSwap:/ {print r + $2, r, $2, p, n}' /proc/[0-9]*/status 2>/dev/null |
+            sort -rn | head -6 | awk '{printf "    %6d kB = %d + %d  %s %s\n", $1, $2, $3, $4, $5}'
+        echo "  cpu: $(top -bn1 2>/dev/null | awk 'NR == 2 {sub(/^CPU: */, ""); print}')"
+        top -bn1 2>/dev/null | awk 'NR > 4 && NR <= 10 {printf "    %5s  %s %s %s\n", $8, $1, $9, $10}'
+        if [ -r /proc/net/nf_conntrack ]; then
+            echo "  connections per device: total, DNS, UDP, ip, mac"
+            awk '{s = ""; d = ""; for (i = 1; i <= NF; i++) {if (s == "" && $i ~ /^src=/) s = substr($i, 5); if (d == "" && $i ~ /^dport=/) d = substr($i, 7)}
+                  t[s]++; if (d == 53) n[s]++; if ($3 == "udp") u[s]++}
+                  END {for (k in t) print t[k], n[k] + 0, u[k] + 0, k}' /proc/net/nf_conntrack | sort -rn | head -6 |
+                while read -r c d u ip; do printf '    %5d %5d %5d  %s %s\n' "$c" "$d" "$u" "$ip" "$(awk -v ip="$ip" '$1 == ip {print $4}' /proc/net/arp)"; done
+            echo "  where to: count, address:port"
+            awk '{d = ""; p = ""; for (i = 1; i <= NF; i++) {if (d == "" && $i ~ /^dst=/) d = substr($i, 5); if (p == "" && $i ~ /^dport=/) p = substr($i, 7)} print d ":" p}' /proc/net/nf_conntrack |
+                sort | uniq -c | sort -rn | head -4 | awk '{printf "    %5d  %s\n", $1, $2}'
+        fi
+        # traffic since the previous snapshot, kB/s per interface
+        now=$(date +%s)
+        awk -v now="$now" 'NR > 2 {sub(":", " "); print $1, $2, $10, now}' /proc/net/dev > "$MEMGUARD_BOX_NET.new"
+        [ -f "$MEMGUARD_BOX_NET" ] && awk 'NR == FNR {rx[$1] = $2; tx[$1] = $3; t = $4; next}
+            ($1 in rx) && $4 > t {r = ($2 - rx[$1]) / ($4 - t) / 1024; x = ($3 - tx[$1]) / ($4 - t) / 1024; if (r + x >= 1) printf "%d %s in %d out %d kB/s\n", r + x, $1, r, x}' \
+            "$MEMGUARD_BOX_NET" "$MEMGUARD_BOX_NET.new" | sort -rn | head -4 | cut -d' ' -f2- | sed 's/^/  traffic /'
+        mv "$MEMGUARD_BOX_NET.new" "$MEMGUARD_BOX_NET"
+        # new kernel warnings only (dmesg keeps old ones and has no wall-clock time here)
+        dmesg 2>/dev/null | grep -iE 'out of memory|killed process|allocation fail|table full|dropping packet' | tail -5 > "$MEMGUARD_BOX_NET.k"
+        [ -f "$MEMGUARD_BOX_NET.kold" ] || : > "$MEMGUARD_BOX_NET.kold"
+        awk 'FILENAME == ARGV[1] {seen[$0] = 1; next} !($0 in seen)' "$MEMGUARD_BOX_NET.kold" "$MEMGUARD_BOX_NET.k" | sed 's/^/  kernel! /'
+        mv "$MEMGUARD_BOX_NET.k" "$MEMGUARD_BOX_NET.kold"
     } >> "$MEMGUARD_BOX" 2>/dev/null
 }
 
@@ -400,7 +426,9 @@ cmd_memguard_run() {
         if [ "$MEMGUARD_BOX_LOAD" -gt 0 ] 2>/dev/null; then
             l=$(load1); now=$(date +%s)
             if { [ "${a:-999999}" -lt $((MEMGUARD_LOW_KB * 3 / 2)) ] || [ "${l:-0}" -ge "$MEMGUARD_BOX_LOAD" ]; } && [ $((now - boxed)) -ge 60 ]; then
-                mg_blackbox "$a" "$(cut -d' ' -f1-3 "${LOADAVG_FILE:-/proc/loadavg}")"; boxed=$now
+                mg_blackbox "$a" "$(cut -d' ' -f1-3 "${LOADAVG_FILE:-/proc/loadavg}")" ""; boxed=$now
+            elif [ $((now - boxed)) -ge 3600 ]; then
+                mg_blackbox "$a" "$(cut -d' ' -f1-3 "${LOADAVG_FILE:-/proc/loadavg}")" "(hourly, normal) "; boxed=$now
             fi
         fi
         if [ "$MEMGUARD_LOAD" -gt 0 ] 2>/dev/null; then

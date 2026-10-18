@@ -3,11 +3,14 @@
 ## v2.3.5 — memory guard: a black box for bad evenings
 
 - While free memory is below 1.5× the guard threshold or the load is `MEMGUARD_BOX_LOAD` (8) or more, the guard
-  writes a snapshot once a minute to `/opt/var/log/tt-blackbox.log`: free memory, load, swap, the number of
-  connections, the 5 processes that hold the most memory and the 5 devices (IP and MAC) with the most
-  connections. A real evening on a 128 MB router: memory went to swap, the load reached 17 and the VPN
-  stopped passing data, but the TrustTunnel client was small — something else ate the memory, and the logs
-  could not say what. `tt-stats memguard` shows how many snapshots there are. The file is rotated at 300 kB.
+  writes a snapshot once a minute to `/opt/var/log/tt-blackbox.log`, and once an hour a baseline of a normal
+  state: free memory, load, swap, kernel memory (slab, cache) and `/tmp`; the processes that hold the most
+  memory, **RAM plus swap** (under zram a big process looks small); CPU and the busiest processes; connections
+  per device (total, DNS, UDP, IP and MAC); where the connections go; traffic per interface; new kernel
+  warnings (OOM kills, full conntrack table). No `ndmc` calls, about a second of work.
+  A real evening on a 128 MB router: memory went to swap, the load reached 17 and the VPN stopped passing data,
+  but the TrustTunnel client was small — something else ate the memory, and the logs could not say what.
+  `tt-stats memguard` shows how many snapshots there are. The file is rotated at 500 kB.
   `MEMGUARD_BOX_LOAD=0` in `mode.conf` turns it off.
 
 ## v2.3.4 — memory guard: default threshold 15000 kB
