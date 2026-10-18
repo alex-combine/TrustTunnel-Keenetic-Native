@@ -368,7 +368,7 @@ if [ $MERGE = 1 ]; then
     awk -v g="$g" '/^object-group fqdn / {cur = $3; next} /^[^ ]/ {cur = ""} cur == g && $1 == "include" {print $2}' $RCF > "$R$BK/merged_$g.txt"
     tail=$(awk -v g="$g" '/^[^ ]/ {dp = ($1 == "dns-proxy")} dp && $1 == "route" && $2 == "object-group" && $3 == g {$1 = $2 = $3 = $4 = ""; sub(/^ +/, ""); print; exit}' $RCF)
     # only the sites $GROUP does not have yet are added — and only they are taken out again on failure or --uninstall
-    awk -v g="$GROUP" 'NR == FNR {if ($0 != "") want[$0] = 1; next} /^object-group fqdn / {cur = $3; next} /^[^ ]/ {cur = ""} cur == g && $1 == "include" {have[$2] = 1}
+    awk -v g="$GROUP" 'FILENAME == ARGV[1] {if ($0 != "") want[$0] = 1; next} /^object-group fqdn / {cur = $3; next} /^[^ ]/ {cur = ""} cur == g && $1 == "include" {have[$2] = 1}
       END {for (d in want) if (!(d in have)) print d}' "$R$BK/merged_$g.txt" $RCF > "$R$BK/merged_$g.added"
     while read -r d; do sys "ndmc -c 'object-group fqdn $GROUP include $d' >/dev/null"; done < "$R$BK/merged_$g.added"
     # every site must be in $GROUP before the old list goes (a full group or a rejected entry would lose it)

@@ -26,7 +26,8 @@ storm of 1000 DNS requests from one device.
   rest are dropped silently and the device simply repeats them. Normal devices have 5–40, a storm 200–300. It
   uses `connlimit` (the `hashlimit` match is missing in the iptables of older firmware), IPv4 and IPv6. A hook in
   `netfilter.d` puts it back after the firmware rebuilds the filter table, and the guard checks it once a minute
-  (after one reboot the router was left without it). `0` turns it off. A second router in router mode behind
+  (after one reboot the router was left without it). `0` turns it off and takes the rules out. Firmware whose
+  `ip6tables` has no `connlimit` keeps the IPv4 limit (it is not rebuilt every minute because of that). A second router in router mode behind
   this one counts as one device for its whole network: raise `DNSLIM_MAX`, or list it (or a Pi-hole/AdGuard on a NAS)
   in `DNSLIM_EXEMPT`. `tt-stats memguard` shows how many requests were dropped.
 - **Less swapping.** The guard lowers `vm.swappiness` to `MEMGUARD_SWAPPINESS` (10) when it starts; it is never
@@ -38,6 +39,7 @@ storm of 1000 DNS requests from one device.
 - **Fix: the overload brake is not reset by jumps of free memory.** It fires on a load of `MEMGUARD_LOAD` for
   2 minutes while free memory is below 1.5× the threshold (was: below the threshold). That night free memory
   jumped 14 → 16 MB, the 2-minute count started over each time, and the load went up to 39.
+- A value with leading zeros in `mode.conf` (`DNSLIM_MAX=0120`) is read as a normal number, not as octal.
 - `tt-stats memguard` shows all of this: early restart, DNS limit (and whether the rule is in the firewall),
   swappiness, black box.
 
@@ -47,6 +49,8 @@ storm of 1000 DNS requests from one device.
   during a check is not lost — the check looks once more. Link-down events are checked too (on a hot-standby
   failover only the main link's "down" arrives), and a VPN that still passes data is never reloaded. A service
   that was stopped meanwhile (the memory guard pause, a manual stop, an update) is not started again.
+  The lock is aged by the router's uptime (the clock jumps by years when NTP sets it at boot), and a killed
+  check takes its lock away.
 - **An update restarts the memory guard with the new code** (before, the old guard kept running until a reboot).
 - **No needless restarts.** A WAN event (any interface going up) used to reload the client. A real day: the
   backup 4G modem reconnected, the VPN on the main link was fine, and it was cut for 11 s anyway. Now the hook

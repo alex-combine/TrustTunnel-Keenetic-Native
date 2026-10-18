@@ -37,17 +37,21 @@ fi
 # One check at a time: two links changing together must not end in two reloads. An event that comes
 # during a check is not lost: it leaves a mark, and the running check looks once more when it is done.
 LOCK=/tmp/tt-wan-hook.lock
+uptime_s() { cut -d. -f1 /proc/uptime; }   # not the clock: at boot NTP moves the clock by years
 if ! mkdir "$LOCK" 2>/dev/null; then
-    # the lock time, or the folder's own time if the holder was killed before writing it
-    lts=$(cat "$LOCK/ts" 2>/dev/null); [ -n "$lts" ] || lts=$(date -r "$LOCK" +%s 2>/dev/null)
+    # the lock age: by its uptime stamp, or by the folder time if the holder was killed before writing it
+    lts=$(cat "$LOCK/ts" 2>/dev/null)
+    if [ -n "$lts" ]; then age=$(( $(uptime_s) - lts )); else age=$(( $(date +%s) - $(date -r "$LOCK" +%s 2>/dev/null || date +%s) )); fi
     # a lock older than 3 minutes was left by a killed copy: a check takes about a minute
-    if ! { [ -n "$lts" ] && [ $(( $(date +%s) - lts )) -gt 180 ] 2>/dev/null && rm -rf "$LOCK" && mkdir "$LOCK" 2>/dev/null; }; then
+    # (a negative age is a stamp of the old clock kind: also stale)
+    if ! { { [ "$age" -gt 180 ] || [ "$age" -lt 0 ]; } 2>/dev/null && rm -rf "$LOCK" && mkdir "$LOCK" 2>/dev/null; }; then
         touch "$LOCK/pending" 2>/dev/null
         logger -t "$LOG_TAG" "WAN event (${1:-?}): another check is running, it will look again"; exit 0
     fi
 fi
-date +%s > "$LOCK/ts"
+uptime_s > "$LOCK/ts"
 trap 'rm -rf "$LOCK"' EXIT
+trap 'exit 1' INT TERM HUP   # a killed check still takes its lock away
 
 START_TS_FILE="/opt/var/run/trusttunnel_start_ts"
 GRACE_PERIOD=30

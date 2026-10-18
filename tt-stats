@@ -77,7 +77,8 @@ MEM_TOTAL_KB=$(awk '/^MemTotal:/ {print $2; exit}' "${MEMINFO_FILE:-/proc/meminf
 if [ "${MEM_TOTAL_KB:-0}" -ge 400000 ] 2>/dev/null; then MG_TIER=512; d_low=40000; d_bloat=60000; d_dns=300; d_swp=0; d_night=0
 elif [ "${MEM_TOTAL_KB:-0}" -ge 180000 ] 2>/dev/null; then MG_TIER=256; d_low=25000; d_bloat=40000; d_dns=200; d_swp=10; d_night=20000
 else MG_TIER=128; d_low=15000; d_bloat=25000; d_dns=120; d_swp=10; d_night=12000; fi
-numor() { case "$1" in ''|*[!0-9]*) echo "$2" ;; *) echo "$1" ;; esac; }   # a typo in mode.conf falls back to the default
+# a typo in mode.conf falls back to the default; leading zeros are dropped ($(( 08 )) would be read as octal)
+numor() { case "$1" in ''|*[!0-9]*) echo "$2" ;; *) v=$(echo "$1" | sed 's/^0*//'); echo "${v:-0}" ;; esac; }
 MEMGUARD_LOW_KB=$(numor "$MEMGUARD_LOW_KB" $d_low)
 MEMGUARD_CRIT_KB=$(numor "$MEMGUARD_CRIT_KB" $((MEMGUARD_LOW_KB * 2 / 3)))   # pause the VPN only below this
 MEMGUARD_SMALL_KB="${MEMGUARD_SMALL_KB:-5000}"   # client smaller than this: memory is eaten by something else
@@ -426,12 +427,16 @@ dnslim_jump() { echo "-i $DNSLIM_IF -p udp --dport 53 -j $DNSLIM_CH"; }
 dnslim_exempts() {  # $1 = iptables|ip6tables → the exempt addresses of this family
     for x in $DNSLIM_EXEMPT; do case "$x" in *:*) [ "$1" = ip6tables ] && echo "$x" ;; *) [ "$1" = iptables ] && echo "$x" ;; esac; done
 }
-dnslim_present() {  # in every family: the jump, the limit with the current number and exactly the current exemptions
+DNSLIM_NO6=/tmp/tt-dnslim.no6   # IPv6 limit could not be set (no connlimit for ip6tables in this firmware)
+dnslim_present() {  # in every family: the jump, exactly the current exemptions, and the limit with the current number last
     for T in iptables ip6tables; do
         command -v $T >/dev/null 2>&1 || continue
-        $T -w -C INPUT $(dnslim_jump) 2>/dev/null && $T -w -C $DNSLIM_CH $(dnslim_drop $T) 2>/dev/null || return 1
+        [ $T = ip6tables ] && [ -f "$DNSLIM_NO6" ] && continue
+        $T -w -C INPUT $(dnslim_jump) 2>/dev/null || return 1
         for x in $(dnslim_exempts $T); do $T -w -C $DNSLIM_CH -s "$x" -j RETURN 2>/dev/null || return 1; done
-        [ "$($T -w -S $DNSLIM_CH 2>/dev/null | grep -c '^-A ')" -eq $(( $(dnslim_exempts $T | wc -l) + 1 )) ] || return 1
+        r=$($T -w -S $DNSLIM_CH 2>/dev/null | grep '^-A ')
+        [ "$(echo "$r" | grep -c .)" -eq $(( $(dnslim_exempts $T | wc -l) + 1 )) ] || return 1
+        echo "$r" | tail -1 | grep -q -- "--connlimit-above $DNSLIM_MAX .*-j DROP" || return 1
     done
 }
 dnslim_remove() {  # takes our chain out, whatever limit and exemptions it was made with
@@ -440,9 +445,10 @@ dnslim_remove() {  # takes our chain out, whatever limit and exemptions it was m
         $T -w -S INPUT 2>/dev/null | grep -e "-j $DNSLIM_CH\$" | sed 's/^-A /-D /' | while read -r r; do eval "$T -w $r" 2>/dev/null; done
         $T -w -F $DNSLIM_CH 2>/dev/null; $T -w -X $DNSLIM_CH 2>/dev/null
     done
+    rm -f "$DNSLIM_NO6"
 }
 dnslim_apply() {  # silent drop of a device's DNS requests beyond DNSLIM_MAX open ones: a DNS storm cannot eat the router any more
-    [ "$DNSLIM_MAX" -gt 0 ] 2>/dev/null || return 0
+    [ "$DNSLIM_MAX" -gt 0 ] 2>/dev/null || { dnslim_remove; return 0; }   # 0 = off: nothing of ours may stay behind
     command -v iptables >/dev/null 2>&1 || return 0
     dnslim_present && return 0   # rebuilding a working chain would reset what connlimit counts
     dnslim_remove
@@ -450,7 +456,12 @@ dnslim_apply() {  # silent drop of a device's DNS requests beyond DNSLIM_MAX ope
         command -v $T >/dev/null 2>&1 || continue
         $T -w -N $DNSLIM_CH 2>/dev/null || continue
         for x in $(dnslim_exempts $T); do $T -w -A $DNSLIM_CH -s "$x" -j RETURN 2>/dev/null; done
-        $T -w -A $DNSLIM_CH $(dnslim_drop $T) 2>/dev/null
+        if ! $T -w -A $DNSLIM_CH $(dnslim_drop $T) 2>/dev/null; then
+            # this family cannot do it: leave no half-made chain, and do not rebuild the working one every minute
+            $T -w -F $DNSLIM_CH 2>/dev/null; $T -w -X $DNSLIM_CH 2>/dev/null
+            [ $T = ip6tables ] && : > "$DNSLIM_NO6"
+            continue
+        fi
         $T -w -I INPUT 1 $(dnslim_jump) 2>/dev/null
     done
 }
