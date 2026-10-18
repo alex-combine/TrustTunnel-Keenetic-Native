@@ -15,7 +15,11 @@ SERVICES='0|VK и Mail.ru~VK & Mail.ru|47541 47764|vk-cdn.net oneme.ru
 4|Okko~Okko||okko.tv
 5|Авито~Avito||avito.st
 6|Wildberries~Wildberries||wbbasket.ru
-7|Звонки по Wi-Fi (оператор)~Wi-Fi calling (carrier)||pub.3gppnetwork.org'
+7|Звонки по Wi-Fi (оператор)~Wi-Fi calling (carrier)||pub.3gppnetwork.org
+8|Обновления Windows~Windows Update||windowsupdate.com mp.microsoft.com update.microsoft.com download.microsoft.com windowsupdate.microsoft.com
+9|Загрузки Steam~Steam downloads||steamcontent.com steampipe.akamaized.net steampipe-partner.akamaized.net steamusercontent.com client-update.akamai.steamstatic.com client-update.steamstatic.com
+10|VR-игры (DiP VR)~VR games (DiP VR)||dipvr.ru 95.165.89.156
+11|Связь с телефоном (Windows)~Phone Link (Windows)||20.202.0.0/16'
 services() {   # "number|name|asn in allow|sites in sites" — only services with something in the exceptions
   [ "$(country)" = ru ] || return 0
   echo "$SERVICES" | while IFS='|' read -r i nm as ds; do

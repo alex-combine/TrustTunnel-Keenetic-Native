@@ -21,6 +21,10 @@
   for 2 minutes while free memory is below 1.5× the threshold (was: below the threshold). That night free
   memory jumped 14 → 16 MB, the 2-minute count started over each time, and the load went up to 39.
 
+- **Razvilka:** «My exceptions» knows four more services and shows them as one line each, removable with
+  one tap: Windows Update (Microsoft update downloads), Steam downloads, VR games (DiP VR) and Phone Link
+  (Windows). Heavy downloads through the VPN load a weak router the most; these go direct.
+
 ## v2.3.4 — memory guard: default threshold 15000 kB
 
 - `tt-stats memguard on` without a number now uses **15000 kB** instead of 10000 kB. On a 128 MB router
