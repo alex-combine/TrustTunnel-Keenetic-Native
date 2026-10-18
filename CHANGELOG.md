@@ -25,6 +25,10 @@
   one tap: Windows Update (Microsoft update downloads), Steam downloads, VR games (DiP VR) and Phone Link
   (Windows). Heavy downloads through the VPN load a weak router the most; these go direct.
 
+- **WAN hook: no needless VPN restarts.** A WAN event (any interface going up) used to reload the client.
+  A real day: the backup 4G modem reconnected, the VPN on the main link was fine, and it was cut for 11 s
+  anyway. Now the hook first checks whether the VPN still passes data and reloads only if it does not.
+
 ## v2.3.4 — memory guard: default threshold 15000 kB
 
 - `tt-stats memguard on` without a number now uses **15000 kB** instead of 10000 kB. On a 128 MB router

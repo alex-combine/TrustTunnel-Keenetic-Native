@@ -52,7 +52,18 @@ else
     exit 0
 fi
 
-logger -t "$LOG_TAG" "WAN interface up, reloading TrustTunnel..."
+# A WAN event does not always break the tunnel: a backup link (an LTE modem, a second provider) going
+# down and up again leaves the VPN on the main link untouched. Reload only if the VPN really stopped
+# passing data (a real day: the backup 4G modem reconnected and the VPN was cut for 11 s for nothing).
+HC_TARGET_URL="${HC_TARGET_URL:-http://connectivitycheck.gstatic.com/generate_204}"
+HC_SOCKS5_PROXY="${HC_SOCKS5_PROXY:-127.0.0.1:1080}"
+if [ "$TT_MODE" = "tun" ]; then
+    curl --interface "$OPKG_IFACE" --connect-timeout 5 --max-time 10 -s -o /dev/null "$HC_TARGET_URL" >/dev/null 2>&1
+else
+    curl --socks5 "$HC_SOCKS5_PROXY" --connect-timeout 5 --max-time 10 -s -o /dev/null "$HC_TARGET_URL" >/dev/null 2>&1
+fi && { logger -t "$LOG_TAG" "WAN event (${1:-?}): the VPN still passes data, no reload needed"; exit 0; }
+
+logger -t "$LOG_TAG" "WAN interface up (${1:-?}), the VPN does not pass data - reloading TrustTunnel..."
 
 if [ "$TT_MODE" = "tun" ]; then
     if [ "$TUN_USE_EXISTING" = "yes" ]; then
