@@ -25,6 +25,7 @@
 #   apply FILE [SEC]   replace the client config safely: restart, check through the tunnel
 #                      for SEC seconds (default 60), roll back by itself if the VPN does not come up
 #   apply-status       result of the last apply
+#   selftest           read-only check: client, tunnel, exit IP, DNS, kill switch, auth key
 #   update-check       is a newer release out? Reads only the version number, downloads and
 #                      changes nothing. A daily check is installed in /opt/etc/cron.daily
 #
@@ -250,6 +251,10 @@ cmd_status() {
     [ "$TT_MODE" = "tun" ] || { echo "Attach mode applies to TUN mode only."; return 0; }
     echo "Attach mode:          ${TUN_USE_EXISTING}"
     echo "Client config:        device_name=$(toml_get device_name) use_existing=$(toml_get use_existing) included_routes=$(toml_get included_routes)"
+    case "$(auth_key_state)" in
+        none) a="not used" ;; works) a="set, supported by this build" ;; *) a="set, but IGNORED by this build - see: tt-stats selftest" ;;
+    esac
+    echo "Auth key:             $a"
     echo "Kill switch (client): $(awk -F'= *' '/^killswitch_enabled/ {print $2; exit}' "$CONFIG_FILE" 2>/dev/null)"
     grep -q '^ensure_device()' "$INIT_SCRIPT" 2>/dev/null && i="supports attach mode" || i="classic only"
     echo "Init script:          $i"
@@ -314,6 +319,11 @@ EOF
             chmod +x "$UPD_CRON"; echo "Daily update check installed: $UPD_CRON"; return 0 ;;
         --remove-cron) rm -f "$UPD_CRON"; echo "Daily update check removed."; return 0 ;;
     esac
+    if [ "$(auth_key_state)" = ignored ]; then   # once a day, together with the update check
+        m="WARNING: client_random_auth_key is set, but this client build ignores it (no SSL_set_custom_client_random). A server with a deny rule will drop this router. Run: tt-stats selftest"
+        logger -p warn -t tt-stats "$m" 2>/dev/null; echo "$(ts) $m" >> "$LOG"
+        [ "$1" = --quiet ] || echo "$m"
+    fi
     lv=$(upd_latest)
     if [ -z "$lv" ]; then [ "$1" = --quiet ] || echo "Could not reach GitHub - try later."; return 0; fi
     mv_=$(upd_min); imp=no
@@ -880,6 +890,62 @@ cmd_apply_status() {
     else echo "no apply since the last reboot"; fi
 }
 
+# --------------------------------------------------------------- selftest ---
+# One read-only check of the whole setup. Changes nothing, never stops the VPN.
+# Exit code = number of failed checks.
+ST_IP_URL="${ST_IP_URL:-https://api.ipify.org}"
+ST_DOH_URL="${ST_DOH_URL:-https://1.1.1.1/dns-query?name=example.com&type=A}"
+st_fail=0
+st_line() {  # $1 = ok|warn|fail, $2 = check, $3 = details
+    case "$1" in ok) m="[ OK ]" ;; warn) m="[WARN]" ;; *) m="[FAIL]"; st_fail=$((st_fail + 1)) ;; esac
+    printf '%s %-16s %s\n' "$m" "$2" "$3"
+}
+st_curl() {  # through the tunnel: device in TUN mode, proxy in SOCKS5 mode
+    if [ "$TT_MODE" = "tun" ]; then curl --interface "$OPKG_IFACE" -s -m 10 "$@" 2>/dev/null
+    else curl --socks5-hostname "${HC_SOCKS5_PROXY:-127.0.0.1:1080}" -s -m 10 "$@" 2>/dev/null; fi
+}
+
+# Auth key state: the key is in the config, but a build without
+# SSL_set_custom_client_random silently connects without it (Keenetic MIPS builds).
+auth_key_state() {  # prints: none | works | ignored
+    grep -q '^[[:space:]]*client_random_auth_key[[:space:]]*=[[:space:]]*"[0-9a-fA-F]' "$CONFIG_FILE" 2>/dev/null || { echo none; return; }
+    # only the current run counts: an old warning must not outlive an upgraded client
+    if awk '/Starting event loop/ {w = 0} /SSL_set_custom_client_random is unavailable/ {w = 1} END {exit !w}' "$CLIENT_LOG" 2>/dev/null; then echo ignored; else echo works; fi
+}
+
+cmd_selftest() {
+    st_fail=0
+    echo "tt-stats $TTS_VERSION selftest ($(ts)), mode $TT_MODE"
+    ver=$(client_version)
+    if [ -z "$ver" ]; then st_line fail "client" "not installed ($CLIENT_BIN)"
+    elif pidof trusttunnel_client >/dev/null 2>&1; then st_line ok "client" "$ver, running"
+    else st_line fail "client" "$ver, NOT running: /opt/etc/init.d/S99trusttunnel start"; fi
+    if [ "$TT_MODE" = "tun" ]; then
+        if ip link show "$OPKG_IFACE" >/dev/null 2>&1; then st_line ok "device" "$OPKG_IFACE present"
+        else st_line fail "device" "$OPKG_IFACE absent"; fi
+    fi
+    if apply_vpn_ok; then st_line ok "vpn" "$HC_TARGET_URL answers through the tunnel"
+    else st_line fail "vpn" "no answer through the tunnel"; fi
+    vip=$(st_curl "$ST_IP_URL"); dip=$(curl -s -m 10 "$ST_IP_URL" 2>/dev/null)
+    if [ -z "$vip" ]; then st_line fail "exit ip" "unknown (no answer through the tunnel)"
+    elif [ "$vip" = "$dip" ]; then st_line fail "exit ip" "$vip = router's own address: traffic is NOT tunneled"
+    else st_line ok "exit ip" "$vip through the tunnel (router itself: ${dip:-unknown})"; fi
+    if st_curl -H 'accept: application/dns-json' "$ST_DOH_URL" | grep -q '"Answer"'; then st_line ok "dns" "DNS over HTTPS works through the tunnel"
+    else st_line warn "dns" "DNS over HTTPS through the tunnel did not answer"; fi
+    if grep -q '^[[:space:]]*killswitch_enabled[[:space:]]*=[[:space:]]*true' "$CONFIG_FILE" 2>/dev/null; then st_line ok "kill switch" "on in the client config"
+    else st_line fail "kill switch" "OFF: if the server is down, traffic goes direct"; fi
+    case "$(auth_key_state)" in
+        none)    st_line ok "auth key" "not used" ;;
+        works)   st_line ok "auth key" "set, this client build supports it" ;;
+        ignored) st_line fail "auth key" "set, but this client build IGNORES it (no SSL_set_custom_client_random): a server with a deny rule will drop this router" ;;
+    esac
+    hc=$(cat /opt/var/run/trusttunnel_hc_state 2>/dev/null)
+    case "$hc" in ok*) st_line ok "health check" "$hc" ;; "") st_line warn "health check" "no result yet" ;; *) st_line warn "health check" "$hc" ;; esac
+    st_line ok "memory" "free $(mem_avail) kB"
+    [ "$st_fail" -eq 0 ] && echo "Result: all checks passed" || echo "Result: $st_fail check(s) failed"
+    return "$st_fail"
+}
+
 case "$1" in
     status|"") cmd_status ;;
     enable)    cmd_enable "$2" ;;
@@ -897,5 +963,6 @@ case "$1" in
     apply)     cmd_apply "$2" "$3" ;;
     apply-run) cmd_apply_run "$2" ;;
     apply-status) cmd_apply_status ;;
-    *) echo "Usage: tt-stats {status|enable [--reboot]|disable|reboot|memguard [on [KB]|off]|apply <config> [seconds]|apply-status|version}"; exit 1 ;;
+    selftest)  cmd_selftest; exit $? ;;
+    *) echo "Usage: tt-stats {status|enable [--reboot]|disable|reboot|memguard [on [KB]|off]|apply <config> [seconds]|apply-status|selftest|version}"; exit 1 ;;
 esac
