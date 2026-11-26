@@ -22,7 +22,9 @@
 #                      and a bloated client is restarted once a night (/opt/etc/cron.daily);
 #                      overload brake: low memory and a high load for 2 minutes -> stop heavy optional
 #                      jobs and shorten the UDP conntrack timeout for 10 minutes
-#   apply FILE [SEC]   replace the client config safely: restart, check through the tunnel
+#   apply FILE|LINK [SEC]
+#                      replace the client config safely: restart, check through the tunnel
+#                      (a tt://... link replaces only the server part, the rest stays)
 #                      for SEC seconds (default 60), roll back by itself if the VPN does not come up
 #   apply-status       result of the last apply
 #   selftest           read-only check: client, tunnel, exit IP, DNS, kill switch, auth key
@@ -840,8 +842,33 @@ apply_wait() {  # $1 = seconds
 
 apply_state() { echo "$*" > "$APPLY_STATE"; log "apply: $*"; }
 
-cmd_apply() {  # $1 = new config file, $2 = seconds to wait (default 60)
+# tt://... link -> a full config: [endpoint] from the link (setup_wizard),
+# everything else (tunnel, kill switch, routes, bound_if) from the current config.
+apply_link_to_config() {  # $1 = link, $2 = result file
+    _w=$(mktemp -d /opt/tmp/tt_link.XXXXXX 2>/dev/null || mktemp -d) || return 1
+    chmod 700 "$_w"
+    "$TT_DIR/setup_wizard" -m non-interactive -d "$1" --settings "$_w/raw.toml" >/dev/null 2>&1
+    if ! grep -q '^\[endpoint\]' "$_w/raw.toml" 2>/dev/null; then rm -rf "$_w"; return 1; fi
+    # has_ipv6 describes the home network, not the server: keep the router's value
+    _v6=$(awk '/^\[/ {f = ($0 == "[endpoint]")} f && /^[[:space:]]*has_ipv6[[:space:]]*=/ {print; exit}' "$CONFIG_FILE")
+    awk -v v6="$_v6" 'FNR == NR { if ($0 ~ /^\[/) f = ($0 == "[endpoint]"); else if (f) { if (v6 != "" && $0 ~ /^[[:space:]]*has_ipv6[[:space:]]*=/) $0 = v6; ep = ep $0 "\n" }; next }
+         $0 == "[endpoint]" { print; printf "%s", ep; skip = 1; next }
+         /^\[/ { skip = 0 }
+         !skip' "$_w/raw.toml" "$CONFIG_FILE" > "$2"
+    rm -rf "$_w"
+    grep -q '^\[endpoint\]' "$2" && grep -q '^\[listener' "$2"
+}
+
+cmd_apply() {  # $1 = new config file or tt://... link, $2 = seconds to wait (default 60)
     new="$1"; secs=$(numor "$2" 60)
+    case "$new" in
+        tt://*)
+            [ -x "$TT_DIR/setup_wizard" ] || die "no $TT_DIR/setup_wizard to read the link"
+            mkdir -p /opt/tmp; lf="/opt/tmp/tt_link_config.toml"; ( umask 077; : > "$lf" )
+            apply_link_to_config "$new" "$lf" || { rm -f "$lf"; die "the link was not accepted (setup_wizard could not read it); nothing changed"; }
+            echo "Link read: the server part ([endpoint]) comes from the link, the rest stays as it is."
+            new="$lf" ;;
+    esac
     [ "$secs" -lt 20 ] && secs=20
     [ -n "$new" ] && [ -s "$new" ] || die "usage: tt-stats apply <new client config> [seconds]"
     [ "$(readlink -f "$new")" = "$(readlink -f "$CONFIG_FILE")" ] && die "give a copy, not the live config: cp $CONFIG_FILE /tmp/new.toml, edit it, then apply"
@@ -881,7 +908,7 @@ cmd_apply_run() {  # background part; $1 = seconds
         if apply_wait 90; then apply_state "rolled back: the old config is in place and the VPN works"
         else apply_state "rolled back: the old config is in place, but the VPN is still down (the watchdog keeps trying)"; fi
     fi
-    rm -f "$APPLY_NEW"; rmdir "$APPLY_LOCK" 2>/dev/null
+    rm -f "$APPLY_NEW" /opt/tmp/tt_link_config.toml; rmdir "$APPLY_LOCK" 2>/dev/null
 }
 
 cmd_apply_status() {
@@ -964,5 +991,5 @@ case "$1" in
     apply-run) cmd_apply_run "$2" ;;
     apply-status) cmd_apply_status ;;
     selftest)  cmd_selftest; exit $? ;;
-    *) echo "Usage: tt-stats {status|enable [--reboot]|disable|reboot|memguard [on [KB]|off]|apply <config> [seconds]|apply-status|selftest|version}"; exit 1 ;;
+    *) echo "Usage: tt-stats {status|enable [--reboot]|disable|reboot|memguard [on [KB]|off]|apply <config|tt://link> [seconds]|apply-status|selftest|version}"; exit 1 ;;
 esac
