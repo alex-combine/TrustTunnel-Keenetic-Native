@@ -254,7 +254,7 @@ cmd_status() {
     echo "Attach mode:          ${TUN_USE_EXISTING}"
     echo "Client config:        device_name=$(toml_get device_name) use_existing=$(toml_get use_existing) included_routes=$(toml_get included_routes)"
     case "$(auth_key_state)" in
-        none) a="not used" ;; works) a="set, supported by this build" ;; ignored) a="set, but IGNORED by this build - see: tt-stats selftest" ;; *) a="set, cannot tell (client binary not readable)" ;;
+        none) a="not used" ;; works) a="set, supported by this build" ;; ignored) a="set, but IGNORED by this build - see: tt-stats selftest" ;; noconfig) a="cannot tell (client config not readable)" ;; *) a="set, cannot tell (client binary not readable)" ;;
     esac
     echo "Auth key:             $a"
     echo "Kill switch (client): $(awk -F'= *' '/^killswitch_enabled/ {print $2; exit}' "$CONFIG_FILE" 2>/dev/null)"
@@ -850,9 +850,26 @@ apply_wait() {  # $1 = seconds; only a new client process counts
     return 1
 }
 
-apply_restart() {  # a hanging init script must not stall the check forever
-    if command -v timeout >/dev/null 2>&1; then timeout 120 "$INIT_SCRIPT" restart >/dev/null 2>&1
-    else "$INIT_SCRIPT" restart >/dev/null 2>&1; fi
+apply_restart() {  # a hanging init script must not stall the check forever: TERM after 120 s, then KILL
+    "$INIT_SCRIPT" restart >/dev/null 2>&1 </dev/null & _rp=$!
+    _i=0; while kill -0 "$_rp" 2>/dev/null && [ "$_i" -lt "${APPLY_RESTART_MAX:-120}" ]; do sleep 1; _i=$((_i + 1)); done
+    if kill -0 "$_rp" 2>/dev/null; then
+        kill "$_rp" 2>/dev/null; sleep 3; kill -9 "$_rp" 2>/dev/null
+        log "apply: the init script hung, stopped after ${_i}s"
+    fi
+    wait "$_rp" 2>/dev/null
+}
+
+pstart() { sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f20; }  # process start time (survives pid reuse)
+lock_owner_alive() {  # the pid in the lock is running and is the same process that took the lock
+    _lp=$(cat "$APPLY_LOCK/pid" 2>/dev/null)
+    [ -n "$_lp" ] && kill -0 "$_lp" 2>/dev/null || return 1
+    _ls=$(cat "$APPLY_LOCK/start" 2>/dev/null)
+    [ -z "$_ls" ] || [ "$_ls" = "$(pstart "$_lp")" ]
+}
+lock_set_owner() {  # pid + start time of this process into the lock, each file replaced atomically
+    pstart $$ > "$APPLY_LOCK/start.$$" && mv -f "$APPLY_LOCK/start.$$" "$APPLY_LOCK/start" && \
+        echo $$ > "$APPLY_LOCK/pid.$$" && mv -f "$APPLY_LOCK/pid.$$" "$APPLY_LOCK/pid"
 }
 
 APPLY_OPID=""
@@ -866,7 +883,7 @@ apply_state_text() {  # drops the operation id (pid.uptime); a state file from a
 }
 
 apply_lock() {  # a lock whose owner is gone (killed, crashed) is stale and taken over
-    if mkdir "$APPLY_LOCK" 2>/dev/null; then echo $$ > "$APPLY_LOCK/pid" && return 0; rm -rf "$APPLY_LOCK"; return 1; fi
+    if mkdir "$APPLY_LOCK" 2>/dev/null; then lock_set_owner && return 0; rm -rf "$APPLY_LOCK"; return 1; fi
     # only one process at a time may judge and remove a stale lock
     if ! mkdir "$APPLY_LOCK.takeover" 2>/dev/null; then
         # a guard older than a minute was left by a killed taker
@@ -876,7 +893,7 @@ apply_lock() {  # a lock whose owner is gone (killed, crashed) is stale and take
     _r=1; _o=$(cat "$APPLY_LOCK/pid" 2>/dev/null)
     if [ -z "$_o" ]; then   # owner may be between mkdir and writing its pid: busy unless older than a minute
         [ -n "$(find "$APPLY_LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ] && _o=stale
-    elif kill -0 "$_o" 2>/dev/null; then
+    elif lock_owner_alive; then
         _o=""
     elif [ -n "$(find "$APPLY_LOCK" -maxdepth 1 -name 'claimed.*' -mmin -1 2>/dev/null)" ]; then
         _o=""               # just handed to the background job, which is writing its pid
@@ -884,7 +901,7 @@ apply_lock() {  # a lock whose owner is gone (killed, crashed) is stale and take
     if [ -n "$_o" ]; then
         rm -rf "$APPLY_LOCK"
         if mkdir "$APPLY_LOCK" 2>/dev/null; then
-            echo $$ > "$APPLY_LOCK/pid" && _r=0 || rm -rf "$APPLY_LOCK"
+            lock_set_owner && _r=0 || rm -rf "$APPLY_LOCK"
         fi
     fi
     rmdir "$APPLY_LOCK.takeover" 2>/dev/null
@@ -911,8 +928,11 @@ apply_link_to_config() {  # $1 = link, $2 = result file
         rm -rf "$_w"; return 1
     fi
     # the merge works line by line: refuse TOML it cannot read safely instead of guessing
-    if grep -q -e '"""' -e "'''" -e '^[[:space:]]*\[[[:space:]]*["'"'"']' "$CONFIG_FILE" "$_w/raw.toml"; then
-        echo "The config uses multi-line strings or quoted table names: replace the [endpoint] part by hand." >&2
+    if grep -q -e '"""' -e "'''" "$CONFIG_FILE" "$_w/raw.toml" || \
+       cat "$CONFIG_FILE" "$_w/raw.toml" | grep '^[[:space:]]*\[' | \
+           grep -v '^[[:space:]]*\[[[:space:]]*\(#.*\)\{0,1\}$' | \
+           grep -qv '^[[:space:]]*\[[A-Za-z0-9_.-]\{1,\}\][[:space:]]*\(#.*\)\{0,1\}$'; then
+        echo "The config uses multi-line strings or table names this merge cannot read ([[...]], quoted or spaced names): replace the [endpoint] part by hand." >&2
         rm -rf "$_w"; return 1
     fi
     # has_ipv6 describes the home network, not the server
@@ -934,7 +954,7 @@ apply_link_to_config() {  # $1 = link, $2 = result file
         END { exit !done }' "$_w/raw.toml" "$CONFIG_FILE" > "$2"
     _rc=$?
     rm -rf "$_w"
-    [ "$_rc" -eq 0 ] && grep -q '^\[listener' "$2"
+    [ "$_rc" -eq 0 ] && grep -q '^[[:space:]]*\[listener\(\.[A-Za-z0-9_-]\{1,\}\)*\][[:space:]]*\(#.*\)\{0,1\}$' "$2"
 }
 
 APPLY_PENDING="$TT_DIR/backup-apply/.pending"   # survives a reboot: backup path of an unfinished apply
@@ -943,7 +963,8 @@ apply_fg_exit() {  # foreground exit before the job took over: undo the request 
     [ -n "$lf" ] && rm -f "$lf"
     if [ -n "$APPLY_HANDOFF" ]; then
         # cancel the handoff; if the job already claimed it, the lock is the job's now
-        if ! mv "$APPLY_HANDOFF" "$APPLY_HANDOFF.cancelled" 2>/dev/null && [ -e "$APPLY_LOCK/claimed.$APPLY_OPID" ]; then return 0; fi
+        # only a successful cancel proves the request is still ours; otherwise touch nothing
+        mv "$APPLY_HANDOFF" "$APPLY_HANDOFF.cancelled" 2>/dev/null || return 0
         rm -f "$APPLY_NEW"
     fi
     apply_unlock
@@ -959,7 +980,11 @@ cmd_apply() {  # $1 = new config file or tt://... link, $2 = seconds to wait (de
     trap 'apply_fg_exit' EXIT
     trap 'exit 1' INT TERM
     if [ -s "$APPLY_PENDING" ]; then
-        echo "Note: an earlier apply was interrupted; its backup: $(cat "$APPLY_PENDING")"
+        _pb=$(cat "$APPLY_PENDING")
+        if [ "$(readlink -f "$new" 2>/dev/null)" != "$(readlink -f "$_pb" 2>/dev/null)" ]; then
+            die "an earlier apply did not finish. Restore its backup first: tt-stats apply $_pb  (or, if the VPN works with the current config: rm $APPLY_PENDING)"
+        fi
+        echo "Restoring the backup of the interrupted apply: $_pb"
     fi
     case "$new" in
         tt://*)
@@ -977,8 +1002,8 @@ cmd_apply() {  # $1 = new config file or tt://... link, $2 = seconds to wait (de
     is_endpoint_header "$src" || die "$src does not look like a client config: no [endpoint] section"
     cp "$src" "$APPLY_NEW" && chmod 600 "$APPLY_NEW" || die "cannot copy $src"
     APPLY_OPID="$$.$(uptime_s)"
+    : > "$APPLY_LOCK/handoff.$APPLY_OPID" || die "cannot write the lock"
     APPLY_HANDOFF="$APPLY_LOCK/handoff.$APPLY_OPID"
-    : > "$APPLY_HANDOFF" || die "cannot write the lock"
     apply_state "started"
     # the job claims the lock by renaming the handoff file of this very operation: one rename wins
     start-stop-daemon -S -b -x "$SELF" -- apply-run "$secs" "$$" "$APPLY_OPID" || die "cannot start the background check"
@@ -1014,7 +1039,7 @@ cmd_apply_run() {  # background part; $1 = seconds, $2 = parent pid, $3 = operat
     trap '' HUP INT
     # claim: rename the handoff file of this very operation; fails if it was cancelled or is not ours
     [ -n "$3" ] && mv "$APPLY_LOCK/handoff.$3" "$APPLY_LOCK/claimed.$3" 2>/dev/null || return 1
-    if ! { echo $$ > "$APPLY_LOCK/pid.$$" && mv -f "$APPLY_LOCK/pid.$$" "$APPLY_LOCK/pid"; }; then
+    if ! lock_set_owner; then
         apply_state "FAILED: cannot take the lock over, nothing changed"; rm -f "$APPLY_NEW"; rm -rf "$APPLY_LOCK"; return 1
     fi
     mkdir -p "$APPLY_DIR"
@@ -1022,9 +1047,10 @@ cmd_apply_run() {  # background part; $1 = seconds, $2 = parent pid, $3 = operat
     if ! cp -p "$CONFIG_FILE" "$bak" || [ ! -s "$bak" ]; then
         apply_state "FAILED: cannot back up the config, nothing changed"; rm -f "$APPLY_NEW"; apply_unlock; return 1
     fi
+    _keep=$(cat "$APPLY_PENDING" 2>/dev/null)   # the backup of an interrupted apply is never rotated away
     # keep the newest APPLY_KEEP by name (the name holds the time; cp -p keeps the old mtime)
     ls -1 "$APPLY_DIR"/trusttunnel_client.toml.* 2>/dev/null | sort -r | tail -n +$((APPLY_KEEP + 1)) | \
-        while read -r f; do [ "$f" != "$bak" ] && rm -f "$f"; done
+        while read -r f; do [ "$f" != "$bak" ] && [ "$f" != "$_keep" ] && rm -f "$f"; done
     if ! { echo "$bak" > "$APPLY_PENDING.tmp" && mv -f "$APPLY_PENDING.tmp" "$APPLY_PENDING"; }; then
         rm -f "$APPLY_PENDING.tmp"
         apply_state "FAILED: cannot write the restore marker, nothing changed"; rm -f "$APPLY_NEW"; apply_unlock; return 1
@@ -1054,12 +1080,11 @@ cmd_apply_run() {  # background part; $1 = seconds, $2 = parent pid, $3 = operat
 
 cmd_apply_status() {
     if [ -d "$APPLY_LOCK" ]; then
-        _o=$(cat "$APPLY_LOCK/pid" 2>/dev/null)
-        if [ -n "$_o" ] && kill -0 "$_o" 2>/dev/null; then echo "running: $(apply_state_text)"
+        if lock_owner_alive; then echo "running: $(apply_state_text)"
         else echo "stale (the job is gone, the next apply takes over): $(apply_state_text)"; fi
     elif [ -f "$APPLY_STATE" ]; then echo "last: $(apply_state_text)"
     else echo "no apply since the last reboot"; fi
-    if [ -s "$APPLY_PENDING" ] && ! { [ -d "$APPLY_LOCK" ] && kill -0 "$(cat "$APPLY_LOCK/pid" 2>/dev/null)" 2>/dev/null; }; then
+    if [ -s "$APPLY_PENDING" ] && ! { [ -d "$APPLY_LOCK" ] && lock_owner_alive; }; then
         echo "INTERRUPTED: an apply did not finish. If the VPN does not work, restore: tt-stats apply $(cat "$APPLY_PENDING")"
     fi
 }
@@ -1106,8 +1131,9 @@ is_ip() {  # exactly one IPv4 (octets 0-255) or IPv6 address (RFC 4291 text form
 # Auth key state: the key is in the config, but a build without
 # SSL_set_custom_client_random silently connects without it (official Keenetic MIPS builds).
 # The binary itself tells: only such builds carry the "is unavailable in this build" warning text.
-auth_key_state() {  # prints: none | works | ignored | unknown
-    grep -q "^[[:space:]]*client_random_auth_key[[:space:]]*=[[:space:]]*[\"'][0-9a-fA-F]" "$CONFIG_FILE" 2>/dev/null || { echo none; return; }
+auth_key_state() {  # prints: none | works | ignored | unknown | noconfig
+    grep -q "^[[:space:]]*client_random_auth_key[[:space:]]*=[[:space:]]*[\"'][0-9a-fA-F]" "$CONFIG_FILE" 2>/dev/null
+    case $? in 0) ;; 1) echo none; return ;; *) echo noconfig; return ;; esac
     [ -f "$CLIENT_BIN" ] && [ -r "$CLIENT_BIN" ] && [ -s "$CLIENT_BIN" ] || { echo unknown; return; }
     # a client that does not even know the key name (older than the feature) ignores it too
     grep -q 'client_random_auth_key' "$CLIENT_BIN" 2>/dev/null
@@ -1134,7 +1160,8 @@ cmd_selftest() {
     if ! is_ip "$vip"; then st_line fail "exit ip" "unknown (no valid answer through the tunnel)"
     elif [ "$vip" = "$dip" ]; then st_line warn "exit ip" "$vip, same as the router's own request: cannot tell (the router itself may go through the VPN)"
     else st_line ok "exit ip" "$vip through the tunnel (router itself: ${dip:-unknown})"; fi
-    if st_curl -H 'accept: application/dns-json' "$ST_DOH_URL" | grep -q '"Answer"'; then st_line ok "dns" "DNS over HTTPS works through the tunnel"
+    _doh=$(st_curl -f -H 'accept: application/dns-json' "$ST_DOH_URL")
+    if printf '%s' "$_doh" | grep -Eq '"Status" *: *0[,}]' && printf '%s' "$_doh" | grep -Eq '"Answer" *: *\[ *\{[^]]*"type" *: *1[,}]'; then st_line ok "dns" "DNS over HTTPS works through the tunnel"
     else st_line warn "dns" "DNS over HTTPS through the tunnel did not answer"; fi
     # Several addresses in [endpoint] addresses = [...]: the client itself pings them and moves
     # to a live one when the current one is blocked (about 70 s for a silent block, 15 s for a reset)
@@ -1153,6 +1180,7 @@ cmd_selftest() {
         none)    st_line ok "auth key" "not used" ;;
         works)   st_line ok "auth key" "set, this client build supports it" ;;
         ignored) st_line fail "auth key" "set, but this client build IGNORES it (no SSL_set_custom_client_random): a server with a deny rule will drop this router" ;;
+        noconfig) st_line warn "auth key" "the client config cannot be read: cannot tell whether a key is set" ;;
         *)       st_line warn "auth key" "set, but the client binary cannot be read: cannot tell whether it supports the key" ;;
     esac
     hc=$(cat /opt/var/run/trusttunnel_hc_state 2>/dev/null)
