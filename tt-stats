@@ -22,6 +22,9 @@
 #                      and a bloated client is restarted once a night (/opt/etc/cron.daily);
 #                      overload brake: low memory and a high load for 2 minutes -> stop heavy optional
 #                      jobs and shorten the UDP conntrack timeout for 10 minutes
+#   apply FILE [SEC]   replace the client config safely: restart, check through the tunnel
+#                      for SEC seconds (default 60), roll back by itself if the VPN does not come up
+#   apply-status       result of the last apply
 #   update-check       is a newer release out? Reads only the version number, downloads and
 #                      changes nothing. A daily check is installed in /opt/etc/cron.daily
 #
@@ -799,6 +802,84 @@ cmd_guard() {
     cmd_disable "after boot the VPN did not come up in attach mode within 4 minutes"
 }
 
+# ------------------------------------------------------------------ apply ---
+# Safe replacement of the client config: backup -> new config -> restart ->
+# check through the tunnel -> roll back by itself if the VPN does not come up.
+# The check runs detached (start-stop-daemon), so an SSH drop or the VPN blip
+# that the restart causes cannot stop the rollback halfway.
+APPLY_DIR="$TT_DIR/backup-apply"
+APPLY_STATE="/tmp/tt-stats.apply.state"
+APPLY_LOCK="/tmp/tt-stats.apply.lock"
+APPLY_NEW="$TT_DIR/.apply.new"
+APPLY_KEEP=5
+
+apply_vpn_ok() {  # socks5 mode has no tunnel device: check through the proxy
+    if [ "$TT_MODE" = "tun" ]; then vpn_ok; return; fi
+    code=$(curl --socks5 "${HC_SOCKS5_PROXY:-127.0.0.1:1080}" -s -o /dev/null -m 8 -w '%{http_code}' "$HC_TARGET_URL" 2>/dev/null)
+    case "$code" in 2??|3??) return 0 ;; *) return 1 ;; esac
+}
+
+apply_wait() {  # $1 = seconds
+    _w=0
+    while [ "$_w" -lt "$1" ]; do
+        sleep 5; _w=$((_w + 5))
+        pidof trusttunnel_client >/dev/null 2>&1 && apply_vpn_ok && return 0
+    done
+    return 1
+}
+
+apply_state() { echo "$*" > "$APPLY_STATE"; log "apply: $*"; }
+
+cmd_apply() {  # $1 = new config file, $2 = seconds to wait (default 60)
+    new="$1"; secs=$(numor "$2" 60)
+    [ "$secs" -lt 20 ] && secs=20
+    [ -n "$new" ] && [ -s "$new" ] || die "usage: tt-stats apply <new client config> [seconds]"
+    [ "$(readlink -f "$new")" = "$(readlink -f "$CONFIG_FILE")" ] && die "give a copy, not the live config: cp $CONFIG_FILE /tmp/new.toml, edit it, then apply"
+    grep -q '^\[endpoint\]' "$new" || die "$new does not look like a client config: no [endpoint] section"
+    mkdir "$APPLY_LOCK" 2>/dev/null || die "another apply is running (remove $APPLY_LOCK if it is stale)"
+    cp "$new" "$APPLY_NEW" && chmod 600 "$APPLY_NEW" || { rmdir "$APPLY_LOCK"; die "cannot copy $new"; }
+    apply_state "started"
+    start-stop-daemon -S -b -x "$SELF" -- apply-run "$secs" || { rmdir "$APPLY_LOCK"; die "cannot start the background check"; }
+    echo "Applying $new: restart and check through the tunnel for up to ${secs}s; rolls back by itself."
+    echo "Safe to close SSH now. Result: tt-stats apply-status, log: $LOG"
+    _t=0; _last=""
+    while [ "$_t" -lt $((secs * 2 + 120)) ]; do   # follow the background job; it keeps going without us
+        sleep 3; _t=$((_t + 3))
+        st=$(cat "$APPLY_STATE" 2>/dev/null)
+        [ "$st" != "$_last" ] && { echo "  $st"; _last="$st"; }
+        case "$st" in ok*) return 0 ;; rolled\ back*|FAILED*) return 1 ;; esac
+    done
+    echo "Still running in the background: tt-stats apply-status"
+}
+
+cmd_apply_run() {  # background part; $1 = seconds
+    secs=$(numor "$1" 60)
+    trap '' HUP INT
+    mkdir -p "$APPLY_DIR"
+    bak="$APPLY_DIR/trusttunnel_client.toml.$(date +%Y%m%d_%H%M%S)"
+    if ! cp -p "$CONFIG_FILE" "$bak"; then apply_state "FAILED: cannot back up the config, nothing changed"; rm -f "$APPLY_NEW"; rmdir "$APPLY_LOCK"; return 1; fi
+    ls -1t "$APPLY_DIR"/trusttunnel_client.toml.* 2>/dev/null | tail -n +$((APPLY_KEEP + 1)) | while read -r f; do rm -f "$f"; done
+    cp -p "$APPLY_NEW" "$CONFIG_FILE"
+    apply_state "new config in place (backup $bak), restarting the client"
+    "$INIT_SCRIPT" restart >/dev/null 2>&1
+    if apply_wait "$secs"; then
+        apply_state "ok: the VPN works with the new config (backup $bak)"
+    else
+        apply_state "the VPN did not come up in ${secs}s, rolling back"
+        cp -p "$bak" "$CONFIG_FILE"
+        "$INIT_SCRIPT" restart >/dev/null 2>&1
+        if apply_wait 90; then apply_state "rolled back: the old config is in place and the VPN works"
+        else apply_state "rolled back: the old config is in place, but the VPN is still down (the watchdog keeps trying)"; fi
+    fi
+    rm -f "$APPLY_NEW"; rmdir "$APPLY_LOCK" 2>/dev/null
+}
+
+cmd_apply_status() {
+    if [ -d "$APPLY_LOCK" ]; then echo "running: $(cat "$APPLY_STATE" 2>/dev/null)"
+    elif [ -f "$APPLY_STATE" ]; then echo "last: $(cat "$APPLY_STATE")"
+    else echo "no apply since the last reboot"; fi
+}
+
 case "$1" in
     status|"") cmd_status ;;
     enable)    cmd_enable "$2" ;;
@@ -813,5 +894,8 @@ case "$1" in
     memguard-stop)  mg_stop ;;
     version)   echo "$TTS_VERSION" ;;
     update-check) cmd_update_check "$2" ;;
-    *) echo "Usage: tt-stats {status|enable [--reboot]|disable|reboot|memguard [on [KB]|off]|version}"; exit 1 ;;
+    apply)     cmd_apply "$2" "$3" ;;
+    apply-run) cmd_apply_run "$2" ;;
+    apply-status) cmd_apply_status ;;
+    *) echo "Usage: tt-stats {status|enable [--reboot]|disable|reboot|memguard [on [KB]|off]|apply <config> [seconds]|apply-status|version}"; exit 1 ;;
 esac
