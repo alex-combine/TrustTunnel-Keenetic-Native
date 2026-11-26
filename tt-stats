@@ -254,7 +254,7 @@ cmd_status() {
     echo "Attach mode:          ${TUN_USE_EXISTING}"
     echo "Client config:        device_name=$(toml_get device_name) use_existing=$(toml_get use_existing) included_routes=$(toml_get included_routes)"
     case "$(auth_key_state)" in
-        none) a="not used" ;; works) a="set, supported by this build" ;; *) a="set, but IGNORED by this build - see: tt-stats selftest" ;;
+        none) a="not used" ;; works) a="set, supported by this build" ;; ignored) a="set, but IGNORED by this build - see: tt-stats selftest" ;; *) a="set, cannot tell yet (no current run in the client log)" ;;
     esac
     echo "Auth key:             $a"
     echo "Kill switch (client): $(awk -F'= *' '/^killswitch_enabled/ {print $2; exit}' "$CONFIG_FILE" 2>/dev/null)"
@@ -821,63 +821,105 @@ cmd_guard() {
 # that the restart causes cannot stop the rollback halfway.
 APPLY_DIR="$TT_DIR/backup-apply"
 APPLY_STATE="/tmp/tt-stats.apply.state"
-APPLY_LOCK="/tmp/tt-stats.apply.lock"
+APPLY_LOCK="/tmp/tt-stats.apply.lock"     # a directory; its pid file names the owner
 APPLY_NEW="$TT_DIR/.apply.new"
 APPLY_KEEP=5
+APPLY_OLDPID=""
 
-apply_vpn_ok() {  # socks5 mode has no tunnel device: check through the proxy
+apply_vpn_ok() {  # socks5 mode has no tunnel device: check through the proxy (the proxy resolves the name)
     if [ "$TT_MODE" = "tun" ]; then vpn_ok; return; fi
-    code=$(curl --socks5 "${HC_SOCKS5_PROXY:-127.0.0.1:1080}" -s -o /dev/null -m 8 -w '%{http_code}' "$HC_TARGET_URL" 2>/dev/null)
+    code=$(curl --socks5-hostname "${HC_SOCKS5_PROXY:-127.0.0.1:1080}" -s -o /dev/null -m 8 -w '%{http_code}' "$HC_TARGET_URL" 2>/dev/null) || return 1
     case "$code" in 2??|3??) return 0 ;; *) return 1 ;; esac
 }
 
-apply_wait() {  # $1 = seconds
-    _w=0
-    while [ "$_w" -lt "$1" ]; do
-        sleep 5; _w=$((_w + 5))
-        pidof trusttunnel_client >/dev/null 2>&1 && apply_vpn_ok && return 0
+apply_wait() {  # $1 = seconds (wall clock); only a new client process counts
+    _end=$(( $(date +%s) + $1 ))
+    while [ "$(date +%s)" -lt "$_end" ]; do
+        sleep 5
+        _p=$(pidof trusttunnel_client 2>/dev/null)
+        [ -n "$_p" ] && [ "$_p" != "$APPLY_OLDPID" ] && apply_vpn_ok && return 0
     done
     return 1
 }
 
 apply_state() { echo "$*" > "$APPLY_STATE"; log "apply: $*"; }
 
+apply_lock() {  # a lock whose owner is gone (killed, crashed) is stale and taken over
+    if mkdir "$APPLY_LOCK" 2>/dev/null; then echo $$ > "$APPLY_LOCK/pid"; return 0; fi
+    _o=$(cat "$APPLY_LOCK/pid" 2>/dev/null)
+    [ -n "$_o" ] && kill -0 "$_o" 2>/dev/null && return 1
+    rm -rf "$APPLY_LOCK"; mkdir "$APPLY_LOCK" 2>/dev/null || return 1
+    echo $$ > "$APPLY_LOCK/pid"
+}
+apply_unlock() { rm -rf "$APPLY_LOCK"; }
+
+apply_put() {  # $1 = source -> live config, all or nothing (temp file + rename in the same directory)
+    cp "$1" "$CONFIG_FILE.apply.tmp" 2>/dev/null && chmod 600 "$CONFIG_FILE.apply.tmp" && \
+        mv -f "$CONFIG_FILE.apply.tmp" "$CONFIG_FILE" && return 0
+    rm -f "$CONFIG_FILE.apply.tmp"; return 1
+}
+
+is_endpoint_header() { grep -q '^\[endpoint\][[:space:]]*\(#.*\)\{0,1\}$' "$1"; }
+
 # tt://... link -> a full config: [endpoint] from the link (setup_wizard),
-# everything else (tunnel, kill switch, routes, bound_if) from the current config.
+# everything else (tunnel, kill switch, routes, bound_if) and the router's has_ipv6 from the current config.
 apply_link_to_config() {  # $1 = link, $2 = result file
     _w=$(mktemp -d /opt/tmp/tt_link.XXXXXX 2>/dev/null || mktemp -d) || return 1
     chmod 700 "$_w"
-    "$TT_DIR/setup_wizard" -m non-interactive -d "$1" --settings "$_w/raw.toml" >/dev/null 2>&1
-    if ! grep -q '^\[endpoint\]' "$_w/raw.toml" 2>/dev/null; then rm -rf "$_w"; return 1; fi
-    # has_ipv6 describes the home network, not the server: keep the router's value
-    _v6=$(awk '/^\[/ {f = ($0 == "[endpoint]")} f && /^[[:space:]]*has_ipv6[[:space:]]*=/ {print; exit}' "$CONFIG_FILE")
-    awk -v v6="$_v6" 'FNR == NR { if ($0 ~ /^\[/) f = ($0 == "[endpoint]"); else if (f) { if (v6 != "" && $0 ~ /^[[:space:]]*has_ipv6[[:space:]]*=/) $0 = v6; ep = ep $0 "\n" }; next }
-         $0 == "[endpoint]" { print; printf "%s", ep; skip = 1; next }
-         /^\[/ { skip = 0 }
-         !skip' "$_w/raw.toml" "$CONFIG_FILE" > "$2"
+    if ! "$TT_DIR/setup_wizard" -m non-interactive -d "$1" --settings "$_w/raw.toml" >/dev/null 2>&1 || ! is_endpoint_header "$_w/raw.toml"; then
+        rm -rf "$_w"; return 1
+    fi
+    # has_ipv6 describes the home network, not the server
+    _v6=$(awk '/^\[/ {f = ($0 ~ /^\[endpoint\][[:space:]]*(#.*)?$/)} f && /^[[:space:]]*has_ipv6[[:space:]]*=/ {print; exit}' "$CONFIG_FILE")
+    awk -v v6="$_v6" '
+        function isep(l) { return l ~ /^\[endpoint\][[:space:]]*(#.*)?$/ }
+        FNR == NR {
+            if ($0 ~ /^\[/) f = isep($0)
+            else if (f) {
+                if ($0 ~ /^[[:space:]]*has_ipv6[[:space:]]*=/) { seen6 = 1; if (v6 != "") $0 = v6 }
+                ep = ep $0 "\n"
+            }
+            next
+        }
+        isep($0) { print "[endpoint]"; printf "%s", ep; if (v6 != "" && !seen6) print v6; skip = 1; done = 1; next }
+        /^\[/ { skip = 0 }
+        !skip { print }
+        END { exit !done }' "$_w/raw.toml" "$CONFIG_FILE" > "$2"
+    _rc=$?
     rm -rf "$_w"
-    grep -q '^\[endpoint\]' "$2" && grep -q '^\[listener' "$2"
+    [ "$_rc" -eq 0 ] && grep -q '^\[listener' "$2"
 }
 
 cmd_apply() {  # $1 = new config file or tt://... link, $2 = seconds to wait (default 60)
-    new="$1"; secs=$(numor "$2" 60)
+    new="$1"; secs=$(numor "$2" 60); lf=""
+    [ "$secs" -lt 20 ] && secs=20
+    [ -n "$new" ] || die "usage: tt-stats apply <new client config | tt://link> [seconds]"
+    apply_lock || die "another apply is running: tt-stats apply-status"
+    trap 'apply_unlock; [ -n "$lf" ] && rm -f "$lf"' EXIT
+    trap 'exit 1' INT TERM
     case "$new" in
         tt://*)
             [ -x "$TT_DIR/setup_wizard" ] || die "no $TT_DIR/setup_wizard to read the link"
-            mkdir -p /opt/tmp; lf="/opt/tmp/tt_link_config.toml"; ( umask 077; : > "$lf" )
-            apply_link_to_config "$new" "$lf" || { rm -f "$lf"; die "the link was not accepted (setup_wizard could not read it); nothing changed"; }
+            mkdir -p /opt/tmp; lf=$(mktemp /opt/tmp/tt_link_config.XXXXXX) || die "cannot create a temporary file"
+            chmod 600 "$lf"
+            apply_link_to_config "$new" "$lf" || die "the link was not accepted (setup_wizard could not read it); nothing changed"
             echo "Link read: the server part ([endpoint]) comes from the link, the rest stays as it is."
-            new="$lf" ;;
+            src="$lf" ;;
+        *)
+            [ -s "$new" ] || die "usage: tt-stats apply <new client config | tt://link> [seconds]"
+            [ "$(readlink -f "$new")" = "$(readlink -f "$CONFIG_FILE")" ] && die "give a copy, not the live config: cp $CONFIG_FILE /tmp/new.toml, edit it, then apply"
+            src="$new" ;;
     esac
-    [ "$secs" -lt 20 ] && secs=20
-    [ -n "$new" ] && [ -s "$new" ] || die "usage: tt-stats apply <new client config> [seconds]"
-    [ "$(readlink -f "$new")" = "$(readlink -f "$CONFIG_FILE")" ] && die "give a copy, not the live config: cp $CONFIG_FILE /tmp/new.toml, edit it, then apply"
-    grep -q '^\[endpoint\]' "$new" || die "$new does not look like a client config: no [endpoint] section"
-    mkdir "$APPLY_LOCK" 2>/dev/null || die "another apply is running (remove $APPLY_LOCK if it is stale)"
-    cp "$new" "$APPLY_NEW" && chmod 600 "$APPLY_NEW" || { rmdir "$APPLY_LOCK"; die "cannot copy $new"; }
+    is_endpoint_header "$src" || die "$src does not look like a client config: no [endpoint] section"
+    cp "$src" "$APPLY_NEW" && chmod 600 "$APPLY_NEW" || die "cannot copy $src"
     apply_state "started"
-    start-stop-daemon -S -b -x "$SELF" -- apply-run "$secs" || { rmdir "$APPLY_LOCK"; die "cannot start the background check"; }
-    echo "Applying $new: restart and check through the tunnel for up to ${secs}s; rolls back by itself."
+    start-stop-daemon -S -b -x "$SELF" -- apply-run "$secs" || die "cannot start the background check"
+    _i=0   # hand the lock over: the background part writes its own pid
+    while [ "$(cat "$APPLY_LOCK/pid" 2>/dev/null)" = "$$" ] && [ "$_i" -lt 10 ]; do sleep 1; _i=$((_i + 1)); done
+    if [ "$(cat "$APPLY_LOCK/pid" 2>/dev/null)" = "$$" ]; then rm -f "$APPLY_NEW"; die "the background check did not start; nothing changed"; fi
+    trap - EXIT INT TERM
+    [ -n "$lf" ] && rm -f "$lf"
+    echo "Applying: restart and check through the tunnel for up to ${secs}s; rolls back by itself."
     echo "Safe to close SSH now. Result: tt-stats apply-status, log: $LOG"
     _t=0; _last=""
     while [ "$_t" -lt $((secs * 2 + 120)) ]; do   # follow the background job; it keeps going without us
@@ -892,27 +934,42 @@ cmd_apply() {  # $1 = new config file or tt://... link, $2 = seconds to wait (de
 cmd_apply_run() {  # background part; $1 = seconds
     secs=$(numor "$1" 60)
     trap '' HUP INT
+    echo $$ > "$APPLY_LOCK/pid"
     mkdir -p "$APPLY_DIR"
     bak="$APPLY_DIR/trusttunnel_client.toml.$(date +%Y%m%d_%H%M%S)"
-    if ! cp -p "$CONFIG_FILE" "$bak"; then apply_state "FAILED: cannot back up the config, nothing changed"; rm -f "$APPLY_NEW"; rmdir "$APPLY_LOCK"; return 1; fi
-    ls -1t "$APPLY_DIR"/trusttunnel_client.toml.* 2>/dev/null | tail -n +$((APPLY_KEEP + 1)) | while read -r f; do rm -f "$f"; done
-    cp -p "$APPLY_NEW" "$CONFIG_FILE"
+    if ! cp -p "$CONFIG_FILE" "$bak" || [ ! -s "$bak" ]; then
+        apply_state "FAILED: cannot back up the config, nothing changed"; rm -f "$APPLY_NEW"; apply_unlock; return 1
+    fi
+    # keep the newest APPLY_KEEP by name (the name holds the time; cp -p keeps the old mtime)
+    ls -1 "$APPLY_DIR"/trusttunnel_client.toml.* 2>/dev/null | sort -r | tail -n +$((APPLY_KEEP + 1)) | \
+        while read -r f; do [ "$f" != "$bak" ] && rm -f "$f"; done
+    APPLY_OLDPID=$(pidof trusttunnel_client 2>/dev/null)
+    if ! apply_put "$APPLY_NEW"; then
+        apply_state "FAILED: cannot write the new config, the old one is untouched"; rm -f "$APPLY_NEW"; apply_unlock; return 1
+    fi
     apply_state "new config in place (backup $bak), restarting the client"
     "$INIT_SCRIPT" restart >/dev/null 2>&1
     if apply_wait "$secs"; then
         apply_state "ok: the VPN works with the new config (backup $bak)"
     else
         apply_state "the VPN did not come up in ${secs}s, rolling back"
-        cp -p "$bak" "$CONFIG_FILE"
+        if ! apply_put "$bak"; then
+            apply_state "FAILED: the rollback could not write the config; restore by hand: cp $bak $CONFIG_FILE"
+            rm -f "$APPLY_NEW"; apply_unlock; return 1
+        fi
+        APPLY_OLDPID=$(pidof trusttunnel_client 2>/dev/null)
         "$INIT_SCRIPT" restart >/dev/null 2>&1
         if apply_wait 90; then apply_state "rolled back: the old config is in place and the VPN works"
         else apply_state "rolled back: the old config is in place, but the VPN is still down (the watchdog keeps trying)"; fi
     fi
-    rm -f "$APPLY_NEW" /opt/tmp/tt_link_config.toml; rmdir "$APPLY_LOCK" 2>/dev/null
+    rm -f "$APPLY_NEW"; apply_unlock
 }
 
 cmd_apply_status() {
-    if [ -d "$APPLY_LOCK" ]; then echo "running: $(cat "$APPLY_STATE" 2>/dev/null)"
+    if [ -d "$APPLY_LOCK" ]; then
+        _o=$(cat "$APPLY_LOCK/pid" 2>/dev/null)
+        if [ -n "$_o" ] && kill -0 "$_o" 2>/dev/null; then echo "running: $(cat "$APPLY_STATE" 2>/dev/null)"
+        else echo "stale (the job is gone, the next apply takes over): $(cat "$APPLY_STATE" 2>/dev/null)"; fi
     elif [ -f "$APPLY_STATE" ]; then echo "last: $(cat "$APPLY_STATE")"
     else echo "no apply since the last reboot"; fi
 }
@@ -931,13 +988,16 @@ st_curl() {  # through the tunnel: device in TUN mode, proxy in SOCKS5 mode
     if [ "$TT_MODE" = "tun" ]; then curl --interface "$OPKG_IFACE" -s -m 10 "$@" 2>/dev/null
     else curl --socks5-hostname "${HC_SOCKS5_PROXY:-127.0.0.1:1080}" -s -m 10 "$@" 2>/dev/null; fi
 }
+is_ip() { echo "$1" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$|^[0-9a-fA-F]*:[0-9a-fA-F:]+$'; }
 
 # Auth key state: the key is in the config, but a build without
 # SSL_set_custom_client_random silently connects without it (Keenetic MIPS builds).
-auth_key_state() {  # prints: none | works | ignored
-    grep -q '^[[:space:]]*client_random_auth_key[[:space:]]*=[[:space:]]*"[0-9a-fA-F]' "$CONFIG_FILE" 2>/dev/null || { echo none; return; }
+auth_key_state() {  # prints: none | works | ignored | unknown
+    grep -q "^[[:space:]]*client_random_auth_key[[:space:]]*=[[:space:]]*[\"'][0-9a-fA-F]" "$CONFIG_FILE" 2>/dev/null || { echo none; return; }
+    [ -r "$CLIENT_LOG" ] || { echo unknown; return; }
     # only the current run counts: an old warning must not outlive an upgraded client
-    if awk '/Starting event loop/ {w = 0} /SSL_set_custom_client_random is unavailable/ {w = 1} END {exit !w}' "$CLIENT_LOG" 2>/dev/null; then echo ignored; else echo works; fi
+    awk '/Starting event loop/ {s = 1; w = 0} /SSL_set_custom_client_random is unavailable/ {w = 1}
+         END { if (!s) print "unknown"; else if (w) print "ignored"; else print "works" }' "$CLIENT_LOG" 2>/dev/null || echo unknown
 }
 
 cmd_selftest() {
@@ -954,14 +1014,17 @@ cmd_selftest() {
     if apply_vpn_ok; then st_line ok "vpn" "$HC_TARGET_URL answers through the tunnel"
     else st_line fail "vpn" "no answer through the tunnel"; fi
     vip=$(st_curl "$ST_IP_URL"); dip=$(curl -s -m 10 "$ST_IP_URL" 2>/dev/null)
-    if [ -z "$vip" ]; then st_line fail "exit ip" "unknown (no answer through the tunnel)"
-    elif [ "$vip" = "$dip" ]; then st_line fail "exit ip" "$vip = router's own address: traffic is NOT tunneled"
+    is_ip "$dip" || dip=""
+    if ! is_ip "$vip"; then st_line fail "exit ip" "unknown (no valid answer through the tunnel)"
+    elif [ "$vip" = "$dip" ]; then st_line warn "exit ip" "$vip, same as the router's own request: cannot tell (the router itself may go through the VPN)"
     else st_line ok "exit ip" "$vip through the tunnel (router itself: ${dip:-unknown})"; fi
     if st_curl -H 'accept: application/dns-json' "$ST_DOH_URL" | grep -q '"Answer"'; then st_line ok "dns" "DNS over HTTPS works through the tunnel"
     else st_line warn "dns" "DNS over HTTPS through the tunnel did not answer"; fi
     # Several addresses in [endpoint] addresses = [...]: the client itself pings them and moves
     # to a live one when the current one is blocked (about 70 s for a silent block, 15 s for a reset)
-    n=$(awk '/^\[/ {f = ($0 == "[endpoint]")} f && /^[[:space:]]*addresses[[:space:]]*=/ {print gsub(/"[^"]*"/, "&"); exit}' "$CONFIG_FILE")
+    n=$(awk '/^\[/ {f = ($0 ~ /^\[endpoint\][[:space:]]*(#.*)?$/); next}
+             f && !a && /^[[:space:]]*addresses[[:space:]]*=/ {a = 1; sub(/^[^=]*=/, "")}
+             a { l = $0; sub(/#.*/, "", l); c += gsub(/"[^"]*"/, "", l); if (l ~ /\]/) { print c; exit } }' "$CONFIG_FILE")
     cur=$(awk '/Starting event loop/ {a = ""} /Using endpoint:/ {sub(/.*address=/, ""); sub(/,.*/, ""); a = $0} END {print a}' "$CLIENT_LOG" 2>/dev/null)
     if [ "${n:-0}" -ge 2 ]; then st_line ok "servers" "$n addresses, now using ${cur:-unknown}; the client moves to a live one by itself"
     else st_line warn "servers" "one address (${cur:-unknown}): no spare if it gets blocked; add a second one to addresses = [...]"; fi
@@ -971,6 +1034,7 @@ cmd_selftest() {
         none)    st_line ok "auth key" "not used" ;;
         works)   st_line ok "auth key" "set, this client build supports it" ;;
         ignored) st_line fail "auth key" "set, but this client build IGNORES it (no SSL_set_custom_client_random): a server with a deny rule will drop this router" ;;
+        *)       st_line warn "auth key" "set, but the client log has no current run: cannot tell whether this build supports it" ;;
     esac
     hc=$(cat /opt/var/run/trusttunnel_hc_state 2>/dev/null)
     case "$hc" in ok*) st_line ok "health check" "$hc" ;; "") st_line warn "health check" "no result yet" ;; *) st_line warn "health check" "$hc" ;; esac
