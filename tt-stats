@@ -856,24 +856,39 @@ apply_restart() {  # a hanging init script must not stall the check forever
 }
 
 APPLY_OPID=""
-apply_state() { echo "$APPLY_OPID $*" > "$APPLY_STATE"; log "apply: $*"; }
+apply_state() {  # shared state (apply-status) + this operation's own result file, both replaced atomically
+    echo "$APPLY_OPID $*" > "$APPLY_STATE.tmp.$$" && mv -f "$APPLY_STATE.tmp.$$" "$APPLY_STATE"
+    [ -n "$APPLY_OPID" ] && echo "$*" > "$APPLY_STATE.$APPLY_OPID.tmp" && mv -f "$APPLY_STATE.$APPLY_OPID.tmp" "$APPLY_STATE.$APPLY_OPID"
+    log "apply: $*"
+}
 apply_state_text() {  # drops the operation id (pid.uptime); a state file from an older version has none
     sed -e 's/^[0-9][0-9]*\.[0-9][0-9]* //' "$APPLY_STATE" 2>/dev/null
 }
 
 apply_lock() {  # a lock whose owner is gone (killed, crashed) is stale and taken over
-    if mkdir "$APPLY_LOCK" 2>/dev/null; then echo $$ > "$APPLY_LOCK/pid"; return 0; fi
-    _o=$(cat "$APPLY_LOCK/pid" 2>/dev/null)
-    if [ -z "$_o" ]; then   # owner may be between mkdir and writing its pid: busy unless older than a minute
-        [ -n "$(find "$APPLY_LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ] || return 1
-    elif kill -0 "$_o" 2>/dev/null; then
+    if mkdir "$APPLY_LOCK" 2>/dev/null; then echo $$ > "$APPLY_LOCK/pid" && return 0; rm -rf "$APPLY_LOCK"; return 1; fi
+    # only one process at a time may judge and remove a stale lock
+    if ! mkdir "$APPLY_LOCK.takeover" 2>/dev/null; then
+        # a guard older than a minute was left by a killed taker
+        [ -n "$(find "$APPLY_LOCK.takeover" -maxdepth 0 -mmin +1 2>/dev/null)" ] && rmdir "$APPLY_LOCK.takeover" 2>/dev/null
         return 1
     fi
-    # stale: move it aside atomically - of two takers only one rename succeeds
-    mv "$APPLY_LOCK" "$APPLY_LOCK.stale.$$" 2>/dev/null || return 1
-    rm -rf "$APPLY_LOCK.stale.$$"
-    mkdir "$APPLY_LOCK" 2>/dev/null || return 1
-    echo $$ > "$APPLY_LOCK/pid"
+    _r=1; _o=$(cat "$APPLY_LOCK/pid" 2>/dev/null)
+    if [ -z "$_o" ]; then   # owner may be between mkdir and writing its pid: busy unless older than a minute
+        [ -n "$(find "$APPLY_LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ] && _o=stale
+    elif kill -0 "$_o" 2>/dev/null; then
+        _o=""
+    elif [ -n "$(find "$APPLY_LOCK" -maxdepth 1 -name 'claimed.*' -mmin -1 2>/dev/null)" ]; then
+        _o=""               # just handed to the background job, which is writing its pid
+    fi
+    if [ -n "$_o" ]; then
+        rm -rf "$APPLY_LOCK"
+        if mkdir "$APPLY_LOCK" 2>/dev/null; then
+            echo $$ > "$APPLY_LOCK/pid" && _r=0 || rm -rf "$APPLY_LOCK"
+        fi
+    fi
+    rmdir "$APPLY_LOCK.takeover" 2>/dev/null
+    return $_r
 }
 apply_unlock() {  # only the owner removes the lock
     [ "$(cat "$APPLY_LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$APPLY_LOCK"
@@ -893,6 +908,11 @@ apply_link_to_config() {  # $1 = link, $2 = result file
     _w=$(mktemp -d /opt/tmp/tt_link.XXXXXX 2>/dev/null || mktemp -d) || return 1
     chmod 700 "$_w"
     if ! "$TT_DIR/setup_wizard" -m non-interactive -d "$1" --settings "$_w/raw.toml" >/dev/null 2>&1 || ! is_endpoint_header "$_w/raw.toml"; then
+        rm -rf "$_w"; return 1
+    fi
+    # the merge works line by line: refuse TOML it cannot read safely instead of guessing
+    if grep -q -e '"""' -e "'''" -e '^[[:space:]]*\[[[:space:]]*["'"'"']' "$CONFIG_FILE" "$_w/raw.toml"; then
+        echo "The config uses multi-line strings or quoted table names: replace the [endpoint] part by hand." >&2
         rm -rf "$_w"; return 1
     fi
     # has_ipv6 describes the home network, not the server
@@ -919,12 +939,24 @@ apply_link_to_config() {  # $1 = link, $2 = result file
 
 APPLY_PENDING="$TT_DIR/backup-apply/.pending"   # survives a reboot: backup path of an unfinished apply
 
+apply_fg_exit() {  # foreground exit before the job took over: undo the request and free the lock
+    [ -n "$lf" ] && rm -f "$lf"
+    if [ -n "$APPLY_HANDOFF" ]; then
+        # cancel the handoff; if the job already claimed it, the lock is the job's now
+        if ! mv "$APPLY_HANDOFF" "$APPLY_HANDOFF.cancelled" 2>/dev/null && [ -e "$APPLY_LOCK/claimed.$APPLY_OPID" ]; then return 0; fi
+        rm -f "$APPLY_NEW"
+    fi
+    apply_unlock
+}
+
 cmd_apply() {  # $1 = new config file or tt://... link, $2 = seconds to wait (default 60)
     new="$1"; secs=$(numor "$2" 60); lf=""
+    umask 077   # temporary copies hold the password: private from the first byte
     [ "$secs" -lt 20 ] && secs=20
     [ -n "$new" ] || die "usage: tt-stats apply <new client config | tt://link> [seconds]"
     apply_lock || die "another apply is running: tt-stats apply-status"
-    trap 'apply_unlock; [ -n "$lf" ] && rm -f "$lf"' EXIT
+    APPLY_HANDOFF=""
+    trap 'apply_fg_exit' EXIT
     trap 'exit 1' INT TERM
     if [ -s "$APPLY_PENDING" ]; then
         echo "Note: an earlier apply was interrupted; its backup: $(cat "$APPLY_PENDING")"
@@ -945,16 +977,21 @@ cmd_apply() {  # $1 = new config file or tt://... link, $2 = seconds to wait (de
     is_endpoint_header "$src" || die "$src does not look like a client config: no [endpoint] section"
     cp "$src" "$APPLY_NEW" && chmod 600 "$APPLY_NEW" || die "cannot copy $src"
     APPLY_OPID="$$.$(uptime_s)"
+    APPLY_HANDOFF="$APPLY_LOCK/handoff.$APPLY_OPID"
+    : > "$APPLY_HANDOFF" || die "cannot write the lock"
     apply_state "started"
-    # the background part takes the lock over only from us (parent pid) and only for this operation id
+    # the job claims the lock by renaming the handoff file of this very operation: one rename wins
     start-stop-daemon -S -b -x "$SELF" -- apply-run "$secs" "$$" "$APPLY_OPID" || die "cannot start the background check"
     _i=0
-    while [ "$(cat "$APPLY_LOCK/pid" 2>/dev/null)" = "$$" ] && [ "$_i" -lt 10 ]; do sleep 1; _i=$((_i + 1)); done
-    if [ "$(cat "$APPLY_LOCK/pid" 2>/dev/null)" = "$$" ]; then
-        # the job did not start: take the request back; a late job will see the lock is not ours and stop
-        rm -f "$APPLY_NEW"; apply_state "FAILED: the background check did not start; nothing changed"
+    while [ -e "$APPLY_HANDOFF" ] && [ "$_i" -lt 10 ]; do sleep 1; _i=$((_i + 1)); done
+    if mv "$APPLY_HANDOFF" "$APPLY_HANDOFF.cancelled" 2>/dev/null; then
+        # the job did not start: the request is taken back, a late job finds nothing to claim
+        APPLY_HANDOFF=""; rm -f "$APPLY_NEW"
+        apply_state "FAILED: the background check did not start; nothing changed"
         die "the background check did not start; nothing changed"
     fi
+    _i=0   # claimed: give the job a moment to write its pid before we let go
+    while [ "$(cat "$APPLY_LOCK/pid" 2>/dev/null)" = "$$" ] && [ "$_i" -lt 5 ]; do sleep 1; _i=$((_i + 1)); done
     trap - EXIT INT TERM
     [ -n "$lf" ] && rm -f "$lf"
     echo "Applying: restart and check through the tunnel for up to ${secs}s; rolls back by itself."
@@ -962,10 +999,10 @@ cmd_apply() {  # $1 = new config file or tt://... link, $2 = seconds to wait (de
     _t=0; _last=""
     while [ "$_t" -lt $((secs * 2 + 240)) ]; do   # follow our own job by its operation id
         sleep 3; _t=$((_t + 3))
-        [ "$(cut -d' ' -f1 "$APPLY_STATE" 2>/dev/null)" = "$APPLY_OPID" ] || continue
-        st=$(apply_state_text)
+        st=$(cat "$APPLY_STATE.$APPLY_OPID" 2>/dev/null)
+        [ -n "$st" ] || continue
         [ "$st" != "$_last" ] && { echo "  $st"; _last="$st"; }
-        case "$st" in ok*) return 0 ;; rolled\ back*|FAILED*) return 1 ;; esac
+        case "$st" in ok*) rm -f "$APPLY_STATE.$APPLY_OPID"; return 0 ;; rolled\ back*|FAILED*) rm -f "$APPLY_STATE.$APPLY_OPID"; return 1 ;; esac
     done
     echo "Still running in the background: tt-stats apply-status"
     return 2
@@ -973,10 +1010,13 @@ cmd_apply() {  # $1 = new config file or tt://... link, $2 = seconds to wait (de
 
 cmd_apply_run() {  # background part; $1 = seconds, $2 = parent pid, $3 = operation id
     secs=$(numor "$1" 60); APPLY_OPID="$3"
+    umask 077
     trap '' HUP INT
-    # take the lock over only if the parent still holds it for us
-    [ -n "$2" ] && [ "$(cat "$APPLY_LOCK/pid" 2>/dev/null)" = "$2" ] || return 1
-    echo $$ > "$APPLY_LOCK/pid"
+    # claim: rename the handoff file of this very operation; fails if it was cancelled or is not ours
+    [ -n "$3" ] && mv "$APPLY_LOCK/handoff.$3" "$APPLY_LOCK/claimed.$3" 2>/dev/null || return 1
+    if ! { echo $$ > "$APPLY_LOCK/pid.$$" && mv -f "$APPLY_LOCK/pid.$$" "$APPLY_LOCK/pid"; }; then
+        apply_state "FAILED: cannot take the lock over, nothing changed"; rm -f "$APPLY_NEW"; rm -rf "$APPLY_LOCK"; return 1
+    fi
     mkdir -p "$APPLY_DIR"
     bak="$APPLY_DIR/trusttunnel_client.toml.$(date +%Y%m%d_%H%M%S)"
     if ! cp -p "$CONFIG_FILE" "$bak" || [ ! -s "$bak" ]; then
@@ -985,7 +1025,10 @@ cmd_apply_run() {  # background part; $1 = seconds, $2 = parent pid, $3 = operat
     # keep the newest APPLY_KEEP by name (the name holds the time; cp -p keeps the old mtime)
     ls -1 "$APPLY_DIR"/trusttunnel_client.toml.* 2>/dev/null | sort -r | tail -n +$((APPLY_KEEP + 1)) | \
         while read -r f; do [ "$f" != "$bak" ] && rm -f "$f"; done
-    echo "$bak" > "$APPLY_PENDING"
+    if ! { echo "$bak" > "$APPLY_PENDING.tmp" && mv -f "$APPLY_PENDING.tmp" "$APPLY_PENDING"; }; then
+        rm -f "$APPLY_PENDING.tmp"
+        apply_state "FAILED: cannot write the restore marker, nothing changed"; rm -f "$APPLY_NEW"; apply_unlock; return 1
+    fi
     APPLY_OLDPID=$(pidof trusttunnel_client 2>/dev/null)
     if ! apply_put "$APPLY_NEW"; then
         rm -f "$APPLY_PENDING"
@@ -1035,11 +1078,29 @@ st_curl() {  # through the tunnel: device in TUN mode, proxy in SOCKS5 mode
     if [ "$TT_MODE" = "tun" ]; then curl --interface "$OPKG_IFACE" -s -m 10 "$@" 2>/dev/null
     else curl --noproxy '' --socks5-hostname "${HC_SOCKS5_PROXY:-127.0.0.1:1080}" -s -m 10 "$@" 2>/dev/null; fi
 }
-is_ip() {  # exactly one IPv4 (octets <= 255) or IPv6 address, nothing else
-    printf '%s\n' "$1" | awk 'NR > 1 {bad = 1}
-        NR == 1 && /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {n = split($0, o, "."); ok = 1; for (i = 1; i <= n; i++) if (o[i] + 0 > 255 || length(o[i]) > 3) ok = 0}
-        NR == 1 && /^[0-9a-fA-F:]+$/ && /:/ && !/:::/ && gsub(/::/, "&") <= 1 && length($0) >= 3 {ok = 1}
-        END {exit !(ok && !bad)}'
+is_ip() {  # exactly one IPv4 (octets 0-255) or IPv6 address (RFC 4291 text form), nothing else
+    printf '%s\n' "$1" | awk '
+        function v4(x,   n, o, i) {
+            if (x !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) return 0
+            n = split(x, o, "."); for (i = 1; i <= n; i++) if (length(o[i]) > 3 || o[i] + 0 > 255) return 0
+            return 1
+        }
+        function v6(x,   parts, n, i, g, groups, dbl, h, t) {
+            if (x !~ /:/ || x ~ /:::/) return 0
+            dbl = gsub(/::/, "::", x); if (dbl > 1) return 0
+            if (x ~ /^:[^:]/ || x ~ /[^:]:$/) return 0
+            groups = 0; n = split(x, parts, ":")
+            for (i = 1; i <= n; i++) {
+                g = parts[i]; if (g == "") continue
+                if (i == n && g ~ /\./) { if (!v4(g)) return 0; groups += 2; continue }
+                if (g !~ /^[0-9a-fA-F]+$/ || length(g) > 4) return 0
+                groups++
+            }
+            return dbl ? groups < 8 : groups == 8
+        }
+        NR > 1 { bad = 1 }
+        NR == 1 { ok = v4($0) || v6($0) }
+        END { exit !(ok && !bad) }'
 }
 
 # Auth key state: the key is in the config, but a build without
@@ -1047,8 +1108,12 @@ is_ip() {  # exactly one IPv4 (octets <= 255) or IPv6 address, nothing else
 # The binary itself tells: only such builds carry the "is unavailable in this build" warning text.
 auth_key_state() {  # prints: none | works | ignored | unknown
     grep -q "^[[:space:]]*client_random_auth_key[[:space:]]*=[[:space:]]*[\"'][0-9a-fA-F]" "$CONFIG_FILE" 2>/dev/null || { echo none; return; }
-    [ -r "$CLIENT_BIN" ] || { echo unknown; return; }
-    if grep -a -q 'SSL_set_custom_client_random is unavailable' "$CLIENT_BIN" 2>/dev/null; then echo ignored; else echo works; fi
+    [ -f "$CLIENT_BIN" ] && [ -r "$CLIENT_BIN" ] && [ -s "$CLIENT_BIN" ] || { echo unknown; return; }
+    # a client that does not even know the key name (older than the feature) ignores it too
+    grep -q 'client_random_auth_key' "$CLIENT_BIN" 2>/dev/null
+    case $? in 0) ;; 1) echo ignored; return ;; *) echo unknown; return ;; esac
+    grep -q 'SSL_set_custom_client_random is unavailable' "$CLIENT_BIN" 2>/dev/null
+    case $? in 0) echo ignored ;; 1) echo works ;; *) echo unknown ;; esac
 }
 
 cmd_selftest() {
