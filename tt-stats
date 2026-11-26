@@ -959,6 +959,12 @@ cmd_selftest() {
     else st_line ok "exit ip" "$vip through the tunnel (router itself: ${dip:-unknown})"; fi
     if st_curl -H 'accept: application/dns-json' "$ST_DOH_URL" | grep -q '"Answer"'; then st_line ok "dns" "DNS over HTTPS works through the tunnel"
     else st_line warn "dns" "DNS over HTTPS through the tunnel did not answer"; fi
+    # Several addresses in [endpoint] addresses = [...]: the client itself pings them and moves
+    # to a live one when the current one is blocked (about 70 s for a silent block, 15 s for a reset)
+    n=$(awk '/^\[/ {f = ($0 == "[endpoint]")} f && /^[[:space:]]*addresses[[:space:]]*=/ {print gsub(/"[^"]*"/, "&"); exit}' "$CONFIG_FILE")
+    cur=$(awk '/Starting event loop/ {a = ""} /Using endpoint:/ {sub(/.*address=/, ""); sub(/,.*/, ""); a = $0} END {print a}' "$CLIENT_LOG" 2>/dev/null)
+    if [ "${n:-0}" -ge 2 ]; then st_line ok "servers" "$n addresses, now using ${cur:-unknown}; the client moves to a live one by itself"
+    else st_line warn "servers" "one address (${cur:-unknown}): no spare if it gets blocked; add a second one to addresses = [...]"; fi
     if grep -q '^[[:space:]]*killswitch_enabled[[:space:]]*=[[:space:]]*true' "$CONFIG_FILE" 2>/dev/null; then st_line ok "kill switch" "on in the client config"
     else st_line fail "kill switch" "OFF: if the server is down, traffic goes direct"; fi
     case "$(auth_key_state)" in
