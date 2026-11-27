@@ -1,0 +1,26 @@
+trusttunnel_client-authkey-mipsel — TrustTunnel client for MIPS (mipsel) Keenetic routers
+with client_random_auth_key support. Built by the TrustTunnel-Keenetic-Native project.
+
+This binary contains software from:
+
+  TrustTunnel Client — https://github.com/TrustTunnel/TrustTunnelClient
+  Licensed under the Apache License, Version 2.0 (LICENSE-Apache-2.0).
+
+  OpenSSL 4.0.2 — https://www.openssl.org/
+  Licensed under the Apache License, Version 2.0 (LICENSE-Apache-2.0).
+  Includes the MIPS build patch from AdGuard's NativeLibsCommon recipes.
+
+Modifications (Apache-2.0, section 4b) — the full diffs are in patches/:
+
+  patches/openssl-0002-custom-client-random-and-hkdf.patch
+    OpenSSL: SSL_set_custom_client_random() — a caller-supplied 32-byte ClientRandom in the
+    TLS 1.3 ClientHello (refused for DTLS and for TLS below 1.3), copied by SSL_dup();
+    and <openssl/hkdf.h> with a BoringSSL-compatible HKDF() on top of EVP_PKEY HKDF.
+
+  patches/client-0001-auth-key-with-openssl.patch
+    TrustTunnel client: build the auth key code with OpenSSL (deprecated low-level AES
+    allowed, the HKDF argument-order warning skipped when the compatible HKDF is present).
+
+Sources of the released build: TrustTunnelClient commit 7bde23f (1.3.0 + 2 commits).
+Build script: build.sh. The patches and the script are under the MIT license of this project;
+the binary as a whole is distributed under the Apache License 2.0.

@@ -87,6 +87,59 @@ ask_yes_no() {
     esac
 }
 
+# === Client build with auth key support (optional, new): MIPS routers only ===
+keybuild_offer() {
+    /opt/bin/tt-stats keybuild eligible 2>/dev/null || return 0
+    echo ""
+    echo "--------------------------------------------------------------------"
+    if [ "$TT_LANG" = ru ]; then cat <<'KEOF'
+ Сборка клиента с поддержкой ключа-пропуска (по желанию, НОВОЕ)
+--------------------------------------------------------------------
+ * Официальный клиент для вашего роутера (процессор MIPS) не умеет
+   ключ-пропуск client_random_auth_key: сервер, где он обязателен,
+   такой роутер не пустит.
+ * Эту сборку делает наш проект из исходников TrustTunnel с небольшой
+   правкой OpenSSL. Патчи и как собрать самому - в docs/keybuild.
+ * Функция новая: пока проверена на одном роутере.
+ * Ставится с автоматическим откатом: если VPN не поднимется за 90 секунд
+   или 4 раза подряд не ответит в следующие 10 минут, сам вернётся
+   прежний клиент.
+ * Вернуть прежний клиент в любой момент: tt-stats keybuild revert
+ Нужна, только если на вашем сервере включён ключ-пропуск.
+ Не знаете - ответьте «н».
+KEOF
+    else cat <<'KEOF'
+ Client build with auth key support (optional, NEW)
+--------------------------------------------------------------------
+ * The official client for your router (MIPS CPU) ignores the auth key
+   client_random_auth_key: a server that requires the key will not let
+   this router in.
+ * This build is made by our project from the TrustTunnel sources with a
+   small OpenSSL patch. The patches and how to build it yourself are in
+   docs/keybuild.
+ * The feature is new: so far it was checked on one router.
+ * It is installed with automatic rollback: if the VPN does not come up
+   in 90 seconds or fails 4 checks in a row in the next 10 minutes, the
+   previous client comes back by itself.
+ * Back to the previous client at any time: tt-stats keybuild revert
+ You need it only if your server uses the auth key.
+ Not sure - answer "n".
+KEOF
+    fi
+    if ask_yes_no "$(L 'Поставить сборку с поддержкой ключа?' 'Install the build with auth key support?')"; then
+        # a dropped SSH session must not stop the switch or its rollback
+        if ( trap '' HUP; TTS_REPO_URL="$REPO_URL" /opt/bin/tt-stats keybuild install ); then
+            echo "✅ $(L 'Сборка с ключом работает; ещё 10 минут она проверяется сама. Итог: tt-stats apply-status' 'The build with the auth key works; it keeps checking itself for 10 more minutes. Result: tt-stats apply-status')"
+            jlog "step keybuild ok"
+        else
+            echo "🟡 $(L 'Сборка не встала — прежний клиент на месте. Подробности: tt-stats apply-status' 'The build did not take — the previous client is in place. Details: tt-stats apply-status')"
+            jlog "step keybuild failed"
+        fi
+    else
+        echo "$(L 'Хорошо. Поставить потом: tt-stats keybuild install' 'OK. To install it later: tt-stats keybuild install')"
+    fi
+}
+
 # === What is on the router already? Decided BEFORE anything changes ===
 TT_JOURNAL="/opt/var/log/tt-install.log"
 jlog() { { mkdir -p /opt/var/log && echo "$(date '+%F %T') $*" >> "$TT_JOURNAL"; } 2>/dev/null || true; }
@@ -266,6 +319,10 @@ if [ "$D_STATE" = attach ] || [ "$D_STATE" = classic ] || [ "$D_STATE" = socks ]
         # a dropped SSH session must not kill the switch or its 10-minute safety timer
         if ( trap '' HUP; /opt/bin/tt-stats enable ); then D_STATE=attach; NEED_REBOOT=1; jlog "step attach ok"
         else echo "🟡 $(L 'Перевод не удался и откатан — VPN работает по-старому. Подробности' 'The switch failed and was rolled back — the VPN works the old way. Details'): /opt/var/log/tt-stats.log"; jlog "step attach failed"; fi
+    fi
+    if [ -n "$U_OK" ] && [ -z "$NEED_REBOOT" ]; then keybuild_offer
+    elif [ -n "$U_OK" ] && /opt/bin/tt-stats keybuild eligible 2>/dev/null; then
+        echo "$(L 'Сборку клиента с поддержкой ключа можно поставить после перезагрузки: tt-stats keybuild install' 'The client build with auth key support can be installed after the reboot: tt-stats keybuild install')"
     fi
     if [ "$D_STATE" = socks ]; then
         echo ""
@@ -764,6 +821,8 @@ else
         fi
     fi
 fi
+
+[ -n "$VPN_OK" ] && keybuild_offer
 
 # === Razvilka (beta, optional): home country direct, everything else via VPN ===
 RZV_DIR="/opt/tmp/razvilka-setup"

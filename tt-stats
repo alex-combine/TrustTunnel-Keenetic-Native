@@ -28,6 +28,9 @@
 #                      for SEC seconds (default 60), roll back by itself if the VPN does not come up
 #   apply-status       result of the last apply
 #   selftest           read-only check: client, tunnel, exit IP, DNS, kill switch, auth key
+#   keybuild [status|install [FILE]|revert]
+#                      MIPS (mipsel) routers: swap in the client build with auth key support
+#                      (client_random_auth_key) with automatic rollback, or put the replaced client back
 #   update-check       is a newer release out? Reads only the version number, downloads and
 #                      changes nothing. A daily check is installed in /opt/etc/cron.daily
 #
@@ -961,11 +964,14 @@ APPLY_PENDING="$TT_DIR/backup-apply/.pending"   # survives a reboot: backup path
 
 apply_fg_exit() {  # foreground exit before the job took over: undo the request and free the lock
     [ -n "$lf" ] && rm -f "$lf"
+    [ -n "$KB_TMP" ] && rm -rf "$KB_TMP"
     if [ -n "$APPLY_HANDOFF" ]; then
         # cancel the handoff; if the job already claimed it, the lock is the job's now
         # only a successful cancel proves the request is still ours; otherwise touch nothing
         mv "$APPLY_HANDOFF" "$APPLY_HANDOFF.cancelled" 2>/dev/null || return 0
-        rm -f "$APPLY_NEW"
+        rm -f "$APPLY_STAGED"
+    elif [ "$(cat "$APPLY_LOCK/pid" 2>/dev/null)" = "$$" ]; then
+        rm -f "$APPLY_STAGED"   # nothing handed over yet: the staged file is ours alone
     fi
     apply_unlock
 }
@@ -976,7 +982,7 @@ cmd_apply() {  # $1 = new config file or tt://... link, $2 = seconds to wait (de
     [ "$secs" -lt 20 ] && secs=20
     [ -n "$new" ] || die "usage: tt-stats apply <new client config | tt://link> [seconds]"
     apply_lock || die "another apply is running: tt-stats apply-status"
-    APPLY_HANDOFF=""
+    APPLY_HANDOFF=""; APPLY_STAGED="$APPLY_NEW"; KB_TMP=""
     trap 'apply_fg_exit' EXIT
     trap 'exit 1' INT TERM
     if [ -s "$APPLY_PENDING" ]; then
@@ -1001,17 +1007,26 @@ cmd_apply() {  # $1 = new config file or tt://... link, $2 = seconds to wait (de
     esac
     is_endpoint_header "$src" || die "$src does not look like a client config: no [endpoint] section"
     cp "$src" "$APPLY_NEW" && chmod 600 "$APPLY_NEW" || die "cannot copy $src"
+    apply_launch apply-run "$secs"
+    echo "Applying: restart and check through the tunnel for up to ${secs}s; rolls back by itself."
+    echo "Safe to close SSH now. Result: tt-stats apply-status, log: $LOG"
+    apply_follow $((secs * 2 + 240))
+}
+
+# Start the background job $1 (args: $2 seconds, parent pid, operation id) and hand it the lock.
+# The caller holds the lock and has staged its file in $APPLY_STAGED.
+apply_launch() {
     APPLY_OPID="$$.$(uptime_s)"
     : > "$APPLY_LOCK/handoff.$APPLY_OPID" || die "cannot write the lock"
     APPLY_HANDOFF="$APPLY_LOCK/handoff.$APPLY_OPID"
     apply_state "started"
     # the job claims the lock by renaming the handoff file of this very operation: one rename wins
-    start-stop-daemon -S -b -x "$SELF" -- apply-run "$secs" "$$" "$APPLY_OPID" || die "cannot start the background check"
+    start-stop-daemon -S -b -x "$SELF" -- "$1" "$2" "$$" "$APPLY_OPID" || die "cannot start the background check"
     _i=0
     while [ -e "$APPLY_HANDOFF" ] && [ "$_i" -lt 10 ]; do sleep 1; _i=$((_i + 1)); done
     if mv "$APPLY_HANDOFF" "$APPLY_HANDOFF.cancelled" 2>/dev/null; then
         # the job did not start: the request is taken back, a late job finds nothing to claim
-        APPLY_HANDOFF=""; rm -f "$APPLY_NEW"
+        APPLY_HANDOFF=""; rm -f "$APPLY_STAGED"
         apply_state "FAILED: the background check did not start; nothing changed"
         die "the background check did not start; nothing changed"
     fi
@@ -1019,29 +1034,39 @@ cmd_apply() {  # $1 = new config file or tt://... link, $2 = seconds to wait (de
     while [ "$(cat "$APPLY_LOCK/pid" 2>/dev/null)" = "$$" ] && [ "$_i" -lt 5 ]; do sleep 1; _i=$((_i + 1)); done
     trap - EXIT INT TERM
     [ -n "$lf" ] && rm -f "$lf"
-    echo "Applying: restart and check through the tunnel for up to ${secs}s; rolls back by itself."
-    echo "Safe to close SSH now. Result: tt-stats apply-status, log: $LOG"
+    [ -n "$KB_TMP" ] && rm -rf "$KB_TMP"
+    return 0
+}
+
+apply_follow() {  # $1 = seconds: follow our own job by its operation id; 0 ok, 1 rolled back/failed, 2 still running
     _t=0; _last=""
-    while [ "$_t" -lt $((secs * 2 + 240)) ]; do   # follow our own job by its operation id
+    while [ "$_t" -lt "$1" ]; do
         sleep 3; _t=$((_t + 3))
         st=$(cat "$APPLY_STATE.$APPLY_OPID" 2>/dev/null)
         [ -n "$st" ] || continue
         [ "$st" != "$_last" ] && { echo "  $st"; _last="$st"; }
-        case "$st" in ok*) rm -f "$APPLY_STATE.$APPLY_OPID"; return 0 ;; rolled\ back*|FAILED*) rm -f "$APPLY_STATE.$APPLY_OPID"; return 1 ;; esac
+        case "$st" in
+            ok*) rm -f "$APPLY_STATE.$APPLY_OPID"; return 0 ;;
+            watching*) return 0 ;;   # works; the job keeps watching in the background
+            rolled\ back*|FAILED*|stopped\ watching*) rm -f "$APPLY_STATE.$APPLY_OPID"; return 1 ;;
+        esac
     done
     echo "Still running in the background: tt-stats apply-status"
     return 2
+}
+
+apply_claim() {  # $1 = operation id: rename its handoff file (fails if cancelled or not ours), then own the lock
+    [ -n "$1" ] && mv "$APPLY_LOCK/handoff.$1" "$APPLY_LOCK/claimed.$1" 2>/dev/null || return 1
+    lock_set_owner && return 0
+    apply_state "FAILED: cannot take the lock over, nothing changed"; rm -f "$APPLY_STAGED"; rm -rf "$APPLY_LOCK"; return 1
 }
 
 cmd_apply_run() {  # background part; $1 = seconds, $2 = parent pid, $3 = operation id
     secs=$(numor "$1" 60); APPLY_OPID="$3"
     umask 077
     trap '' HUP INT
-    # claim: rename the handoff file of this very operation; fails if it was cancelled or is not ours
-    [ -n "$3" ] && mv "$APPLY_LOCK/handoff.$3" "$APPLY_LOCK/claimed.$3" 2>/dev/null || return 1
-    if ! lock_set_owner; then
-        apply_state "FAILED: cannot take the lock over, nothing changed"; rm -f "$APPLY_NEW"; rm -rf "$APPLY_LOCK"; return 1
-    fi
+    APPLY_STAGED="$APPLY_NEW"
+    apply_claim "$3" || return 1
     mkdir -p "$APPLY_DIR"
     bak="$APPLY_DIR/trusttunnel_client.toml.$(date +%Y%m%d_%H%M%S)"
     if ! cp -p "$CONFIG_FILE" "$bak" || [ ! -s "$bak" ]; then
@@ -1089,6 +1114,169 @@ cmd_apply_status() {
     fi
 }
 
+# ------------------------------------------------ client build with auth key ---
+# The official client for MIPS routers is built with OpenSSL and ignores client_random_auth_key.
+# keybuild install swaps in this project's build (official sources + a small OpenSSL patch) with the
+# same lock, background job and rollback as apply, then keeps watching the VPN for KB_WATCH seconds.
+KB_ASSET="${KB_ASSET:-trusttunnel_client-authkey-mipsel}"
+KB_OFFICIAL="$TT_DIR/trusttunnel_client.official"   # the client it replaced
+KB_NEW="$TT_DIR/.keybuild.new"                       # staged binary
+KB_PREV="$TT_DIR/.keybuild.prev"                     # what to go back to if the switch fails
+KB_PENDING="$TT_DIR/backup-apply/.keybuild-pending"
+KB_WATCH=$(numor "$KB_WATCH" 600)
+KB_TMP=""
+
+elf_bytes() {  # octal bytes, as BusyBox od knows only the classic options
+    dd if="$1" bs=1 skip="$2" count="$3" 2>/dev/null | od -b | awk 'NR == 1 {$1 = ""; printf "%s", $0}' | tr -d ' '
+}
+is_mipsel_bin() {  # ELF, 32-bit, little-endian, machine 8 (MIPS)
+    [ "$(elf_bytes "$1" 0 6)" = "177105114106001001" ] && [ "$(elf_bytes "$1" 18 2)" = "010000" ]
+}
+has_key_support() {  # $1 = client binary: 0 supports the auth key, 1 ignores it, 2 cannot tell
+    [ -f "$1" ] && [ -r "$1" ] && [ -s "$1" ] || return 2
+    grep -q 'client_random_auth_key' "$1" 2>/dev/null   # older than the option: ignores it too
+    case $? in 0) ;; 1) return 1 ;; *) return 2 ;; esac
+    grep -q 'SSL_set_custom_client_random is unavailable' "$1" 2>/dev/null
+    case $? in 0) return 1 ;; 1) return 0 ;; *) return 2 ;; esac
+}
+kb_eligible() {  # a mipsel client that ignores the key: the build helps here
+    [ -x "$CLIENT_BIN" ] && is_mipsel_bin "$CLIENT_BIN" || return 1
+    has_key_support "$CLIENT_BIN"; [ $? -eq 1 ]
+}
+bin_version() { "$1" --version 2>/dev/null | awk '{print $2; exit}'; }
+kb_put() {  # $1 = binary -> live client, all or nothing
+    cp -p "$1" "$CLIENT_BIN.tmp" 2>/dev/null && chmod 755 "$CLIENT_BIN.tmp" && \
+        mv -f "$CLIENT_BIN.tmp" "$CLIENT_BIN" && return 0
+    rm -f "$CLIENT_BIN.tmp"; return 1
+}
+
+cmd_keybuild_status() {
+    has_key_support "$CLIENT_BIN"
+    case $? in 0) k="supports the auth key" ;; 1) k="ignores the auth key" ;; *) k="cannot tell" ;; esac
+    echo "Client:          $(bin_version "$CLIENT_BIN" || true) ($k)"
+    [ -s "$KB_OFFICIAL" ] && echo "Replaced client: $KB_OFFICIAL ($(bin_version "$KB_OFFICIAL")) - back to it: tt-stats keybuild revert"
+    kb_eligible && echo "This router can use the client build with auth key support: tt-stats keybuild install"
+    [ -s "$KB_PENDING" ] && echo "INTERRUPTED: a client switch did not finish. If the VPN does not work: tt-stats keybuild revert"
+    return 0
+}
+
+kb_begin() {  # common start of install/revert in the foreground
+    umask 077
+    [ -x "$CLIENT_BIN" ] || die "no client at $CLIENT_BIN"
+    apply_lock || die "another apply is running: tt-stats apply-status"
+    APPLY_HANDOFF=""; APPLY_STAGED="$KB_NEW"; KB_TMP=""; lf=""
+    trap 'apply_fg_exit' EXIT
+    trap 'exit 1' INT TERM
+    [ -s "$APPLY_PENDING" ] && die "an earlier apply did not finish: tt-stats apply-status"
+}
+
+cmd_keybuild_install() {  # $1 = optional local file instead of the download
+    kb_begin
+    is_mipsel_bin "$CLIENT_BIN" || die "this build is for MIPS little-endian (mipsel) routers; this client is for another CPU. Nothing changed."
+    has_key_support "$CLIENT_BIN"; [ $? -eq 0 ] && { echo "The client already supports the auth key - nothing to do."; return 0; }
+    mkdir -p /opt/tmp; KB_TMP=$(mktemp -d /opt/tmp/tt_keybuild.XXXXXX) || die "cannot create a temporary folder"
+    if [ -n "$1" ]; then
+        cp "$1" "$KB_TMP/client" 2>/dev/null || die "cannot read $1"
+        [ -s "$1.sha256" ] && cp "$1.sha256" "$KB_TMP/client.sha256"
+    else
+        echo "Downloading the client build with auth key support..."
+        curl -fsSL -m 600 "$TTS_REPO_URL/$KB_ASSET" -o "$KB_TMP/client" && \
+            curl -fsSL -m 60 "$TTS_REPO_URL/$KB_ASSET.sha256" -o "$KB_TMP/client.sha256" || \
+            die "download failed ($TTS_REPO_URL/$KB_ASSET); nothing changed"
+    fi
+    if [ -s "$KB_TMP/client.sha256" ]; then
+        _want=$(awk '{print $1; exit}' "$KB_TMP/client.sha256"); _got=$(sha256sum "$KB_TMP/client" 2>/dev/null | awk '{print $1}')
+        [ -n "$_want" ] && [ "$_want" = "$_got" ] || die "checksum mismatch; nothing changed"
+    elif [ -z "$1" ]; then
+        die "no checksum next to the download; nothing changed"
+    fi
+    chmod 755 "$KB_TMP/client"
+    is_mipsel_bin "$KB_TMP/client" || die "the file is not a mipsel client; nothing changed"
+    bin_version "$KB_TMP/client" | grep -q '^[0-9]' || die "the new build does not start on this router; nothing changed"
+    has_key_support "$KB_TMP/client"; [ $? -eq 0 ] || die "the file is not a build with auth key support; nothing changed"
+    cp -p "$KB_TMP/client" "$KB_NEW" && chmod 755 "$KB_NEW" || die "cannot stage the new build (free space in $TT_DIR?)"
+    echo "New build: $(bin_version "$KB_NEW"), the current client: $(bin_version "$CLIENT_BIN")"
+    apply_launch keybuild-install-run 90
+    echo "Switching the client: restart, check through the tunnel for up to 90s, then watch for $((KB_WATCH / 60)) minutes;"
+    echo "the replaced client comes back by itself if the VPN fails. Safe to close SSH. Result: tt-stats apply-status"
+    apply_follow 400
+}
+
+cmd_keybuild_revert() {
+    kb_begin
+    [ -s "$KB_OFFICIAL" ] || die "no replaced client to go back to ($KB_OFFICIAL)"
+    cmp -s "$KB_OFFICIAL" "$CLIENT_BIN" && { echo "The replaced client is already in place."; rm -f "$KB_OFFICIAL"; return 0; }
+    cp -p "$KB_OFFICIAL" "$KB_NEW" && chmod 755 "$KB_NEW" || die "cannot stage the client (free space in $TT_DIR?)"
+    apply_launch keybuild-revert-run 90
+    echo "Putting the replaced client back: restart and check through the tunnel for up to 90s. Result: tt-stats apply-status"
+    apply_follow 400
+}
+
+kb_switch() {  # $1 = install|revert; the job owns the lock, $KB_NEW is staged
+    mkdir -p "$APPLY_DIR"
+    if [ "$1" = install ] && ! cmp -s "$KB_OFFICIAL" "$CLIENT_BIN"; then
+        # keep the replaced client only if it is one without key support (never save a custom build over it)
+        if [ ! -s "$KB_OFFICIAL" ] || { has_key_support "$CLIENT_BIN"; [ $? -eq 1 ]; }; then
+            cp -p "$CLIENT_BIN" "$KB_OFFICIAL.tmp" && mv -f "$KB_OFFICIAL.tmp" "$KB_OFFICIAL" || {
+                rm -f "$KB_OFFICIAL.tmp"; apply_state "FAILED: cannot save the current client, nothing changed"; return 1; }
+        fi
+    fi
+    cp -p "$CLIENT_BIN" "$KB_PREV.tmp" && mv -f "$KB_PREV.tmp" "$KB_PREV" || {
+        rm -f "$KB_PREV.tmp"; apply_state "FAILED: cannot save the current client, nothing changed"; return 1; }
+    if ! { echo "$1" > "$KB_PENDING.tmp" && mv -f "$KB_PENDING.tmp" "$KB_PENDING"; }; then
+        rm -f "$KB_PENDING.tmp"; apply_state "FAILED: cannot write the restore marker, nothing changed"; return 1
+    fi
+    APPLY_OLDPID=$(pidof trusttunnel_client 2>/dev/null)
+    kb_put "$KB_NEW" || { apply_state "FAILED: cannot put the new client in place, the old one is untouched"; return 1; }
+    apply_state "client $(bin_version "$CLIENT_BIN") in place, restarting"
+    apply_restart
+    apply_wait 90 || { kb_back "the VPN did not come up in 90s"; return 1; }
+    [ "$1" = revert ] && { apply_state "ok: the replaced client $(bin_version "$CLIENT_BIN") is back and the VPN works"; rm -f "$KB_OFFICIAL"; return 0; }
+    apply_state "watching: the VPN works with $(bin_version "$CLIENT_BIN"); checking it for $((KB_WATCH / 60)) more minutes"
+    _f=0; _t=0
+    while [ "$_t" -lt "$KB_WATCH" ]; do
+        sleep 30; _t=$((_t + 30))
+        # someone else (the installer, by hand) changed the client: not ours to judge or roll back
+        if ! cmp -s "$KB_NEW" "$CLIENT_BIN"; then
+            apply_state "stopped watching: the client was replaced meanwhile (now $(bin_version "$CLIENT_BIN")); nothing rolled back"
+            return 1
+        fi
+        if apply_vpn_ok; then _f=0; else
+            _f=$((_f + 1)); log "keybuild: check failed ($_f in a row)"
+            [ "$_f" -ge 4 ] && { kb_back "the VPN failed 4 checks in a row after the switch"; return 1; }
+        fi
+    done
+    cmp -s "$KB_NEW" "$CLIENT_BIN" || {
+        apply_state "stopped watching: the client was replaced meanwhile (now $(bin_version "$CLIENT_BIN")); nothing rolled back"; return 1; }
+    apply_state "ok: the client $(bin_version "$CLIENT_BIN") with auth key support stays (replaced client kept: $KB_OFFICIAL)"
+}
+
+kb_back() {  # $1 = reason: put the previous client back
+    if [ -s "$KB_NEW" ] && ! cmp -s "$KB_NEW" "$CLIENT_BIN"; then
+        apply_state "$1, but the client was replaced meanwhile (now $(bin_version "$CLIENT_BIN")); nothing rolled back"; return 1
+    fi
+    apply_state "$1, rolling back"
+    if ! kb_put "$KB_PREV"; then
+        apply_state "FAILED: the rollback could not write the client; restore by hand: cp $KB_PREV $CLIENT_BIN"; return 1
+    fi
+    APPLY_OLDPID=$(pidof trusttunnel_client 2>/dev/null)
+    apply_restart
+    if apply_wait 90; then apply_state "rolled back: the previous client $(bin_version "$CLIENT_BIN") is in place and the VPN works"
+    else apply_state "rolled back: the previous client is in place, but the VPN is still down (the watchdog keeps trying)"; fi
+}
+
+cmd_keybuild_run() {  # background part; $1 = install|revert, $2 = seconds, $3 = parent pid, $4 = operation id
+    APPLY_OPID="$4"; APPLY_STAGED="$KB_NEW"
+    umask 077
+    trap '' HUP INT
+    apply_claim "$4" || return 1
+    kb_switch "$1"
+    # after a rolled-back install the "replaced" client is the live one: no copy to offer
+    [ "$1" = install ] && cmp -s "$KB_OFFICIAL" "$CLIENT_BIN" && rm -f "$KB_OFFICIAL"
+    rm -f "$KB_NEW" "$KB_PREV" "$KB_PENDING"; apply_unlock
+    sleep 5; rm -f "$APPLY_STATE.$APPLY_OPID"   # the foreground has read it by now or left after "watching"
+}
+
 # --------------------------------------------------------------- selftest ---
 # One read-only check of the whole setup. Changes nothing, never stops the VPN.
 # Exit code = number of failed checks.
@@ -1134,12 +1322,8 @@ is_ip() {  # exactly one IPv4 (octets 0-255) or IPv6 address (RFC 4291 text form
 auth_key_state() {  # prints: none | works | ignored | unknown | noconfig
     grep -q "^[[:space:]]*client_random_auth_key[[:space:]]*=[[:space:]]*[\"'][0-9a-fA-F]" "$CONFIG_FILE" 2>/dev/null
     case $? in 0) ;; 1) echo none; return ;; *) echo noconfig; return ;; esac
-    [ -f "$CLIENT_BIN" ] && [ -r "$CLIENT_BIN" ] && [ -s "$CLIENT_BIN" ] || { echo unknown; return; }
-    # a client that does not even know the key name (older than the feature) ignores it too
-    grep -q 'client_random_auth_key' "$CLIENT_BIN" 2>/dev/null
-    case $? in 0) ;; 1) echo ignored; return ;; *) echo unknown; return ;; esac
-    grep -q 'SSL_set_custom_client_random is unavailable' "$CLIENT_BIN" 2>/dev/null
-    case $? in 0) echo ignored ;; 1) echo works ;; *) echo unknown ;; esac
+    has_key_support "$CLIENT_BIN"
+    case $? in 0) echo works ;; 1) echo ignored ;; *) echo unknown ;; esac
 }
 
 cmd_selftest() {
@@ -1208,5 +1392,15 @@ case "$1" in
     apply-run) cmd_apply_run "$2" "$3" "$4" ;;
     apply-status) cmd_apply_status ;;
     selftest)  cmd_selftest; exit $? ;;
-    *) echo "Usage: tt-stats {status|enable [--reboot]|disable|reboot|memguard [on [KB]|off]|apply <config|tt://link> [seconds]|apply-status|selftest|version}"; exit 1 ;;
+    keybuild)
+        case "$2" in
+            ""|status) cmd_keybuild_status ;;
+            install)   cmd_keybuild_install "$3"; exit $? ;;
+            revert)    cmd_keybuild_revert; exit $? ;;
+            eligible)  kb_eligible; exit $? ;;
+            *) echo "Usage: tt-stats keybuild [status|install [FILE]|revert]"; exit 1 ;;
+        esac ;;
+    keybuild-install-run) cmd_keybuild_run install "$2" "$3" "$4" ;;
+    keybuild-revert-run)  cmd_keybuild_run revert "$2" "$3" "$4" ;;
+    *) echo "Usage: tt-stats {status|enable [--reboot]|disable|reboot|memguard [on [KB]|off]|apply <config|tt://link> [seconds]|apply-status|selftest|keybuild [status|install|revert]|version}"; exit 1 ;;
 esac

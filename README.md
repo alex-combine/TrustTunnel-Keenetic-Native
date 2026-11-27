@@ -13,6 +13,7 @@
 > - **One command — from nothing to a working VPN.** The installer (in Russian or English) builds the client config from the server file by itself, starts the VPN, checks it and, if something is wrong, puts everything back.
 > - **Update from any version**, including the original TrustTunnel-Keenetic: the installer works out what is installed, keeps your settings and makes a backup.
 > - **Statistics in the Keenetic web interface** for the TUN connection (the classic setup always shows 0).
+> - **Safe config changes** (`tt-stats apply`, also by a `tt://…` link) with automatic rollback, a one-command **self-test**, and the **auth key on MIPS routers** — our own client build (new).
 > - **Razvilka** (optional, beta): sites of your own country go direct, everything else via VPN; your own Telegram bot on the router.
 >
 > Jump to: [Quick start](#quick-start) · [Updating](#trusttunnel-already-installed-updating-from-any-version) · [If something is wrong](#if-something-is-wrong) · [Razvilka](#razvilka-beta-home-country-direct-everything-else-via-vpn)
@@ -402,6 +403,9 @@ All actions are logged to `/opt/var/log/tt-stats.log`.
 | `tt-stats version` | Helper version |
 | `tt-stats update-check` | Is a newer release out? (reads only the version number); `--remove-cron` turns the daily check off |
 | `tt-stats memguard [on [kB]\|off]` | Memory guard for routers with 128 MB (see below) |
+| `tt-stats apply FILE\|tt://…` | Change the client config with a check and automatic rollback |
+| `tt-stats selftest` | Check everything: client, tunnel, IP, DNS, kill switch, auth key |
+| `tt-stats keybuild [install\|revert]` | Client build with auth key support (MIPS routers) |
 
 ### Recommended: kill switch
 
@@ -456,6 +460,36 @@ Prefer e-mail? On the GitHub page click **Watch → Custom → Releases**.
 - **MTU?** In attach mode the device MTU comes from `TUN_MTU` in `mode.conf`; `tt-stats enable` sets it from `mtu_size` of the client config and keeps `interface OpkgTunN ip mtu` equal to it.
 - **What if the VPN server itself is down at the first reboot after the switch?** The boot guard cannot tell a server outage from a failed switch, so it restores the classic setup to be safe. When the server is back, run `tt-stats enable --reboot` again. Later reboots are not checked: once confirmed, attach mode stays.
 - **How do I go back?** `tt-stats disable` (or restore the files from `/opt/trusttunnel_client/backup-classic/` by hand).
+
+## Safe config changes, self-test, auth key (2.4)
+
+### Change the client config without risk: `tt-stats apply`
+
+```bash
+cp /opt/trusttunnel_client/trusttunnel_client.toml /opt/tmp/new.toml   # edit the copy
+tt-stats apply /opt/tmp/new.toml          # or a link: tt-stats apply 'tt://…'
+tt-stats apply-status                     # the result
+```
+
+`apply` backs up the config, puts the new file in place, restarts the client and checks the internet through the tunnel for up to 60 seconds (the second argument sets your own time). If it does not work, the old file comes back by itself. The work runs in the background: you can close SSH, a dropped connection does not stop the rollback. A `tt://…` link (the server gives it) replaces only the server part `[endpoint]`; the tunnel, kill switch, routes and the router's `has_ipv6` stay as they are. This is also the easy way to move to a new server or to add a spare address to `addresses = [...]`: the client moves to the next address by itself when the first one stops answering.
+
+### Check everything with one command: `tt-stats selftest`
+
+Read-only, changes nothing: the client runs, the tunnel is up, the internet works through the VPN, the exit IP, DNS over HTTPS, the kill switch, the auth key, the last watchdog check, free memory, and how many server addresses the config has (one is a warning: no spare). The exit code is the number of failed checks.
+
+### Auth key (`client_random_auth_key`) and a client build that supports it
+
+TrustTunnel 1.3 can let only "own" clients in, by an auth key. The official client for routers with a **MIPS** CPU (most Keenetic models) is built with OpenSSL and **silently ignores** the key — a server that requires the key will not let such a router in. `tt-stats status` and `selftest` warn about it.
+
+Our project builds the client from the same sources with a small OpenSSL patch (a custom ClientRandom, as in BoringSSL). **The feature is new: so far it was checked on one router.** The installer offers it on a router that needs it (the default answer is "no"), or by hand:
+
+```bash
+tt-stats keybuild            # what is installed and whether this router needs the build
+tt-stats keybuild install    # download, verify the checksum, install with automatic rollback
+tt-stats keybuild revert     # put the previous client back
+```
+
+How it is installed: the file is downloaded from the GitHub release and checked against its `sha256`, test-started on the router, and the previous client is kept (`/opt/trusttunnel_client/trusttunnel_client.official`). If the VPN does not come up in 90 seconds or fails 4 checks in a row in the next 10 minutes, the previous client comes back by itself. Add the key to the client config after that, with `tt-stats apply`. The patches, licenses and how to build it yourself: [docs/keybuild](docs/keybuild/README.md).
 
 ## Razvilka (beta): home country direct, everything else via VPN
 

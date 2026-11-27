@@ -1,5 +1,40 @@
 # Changelog
 
+## v2.4.0 — safe config changes, self-test, auth key on MIPS routers
+
+### Change the client config safely (`tt-stats apply`)
+
+- **`tt-stats apply FILE [SEC]`** backs up the config, puts the new one in place, restarts the client and checks the
+  internet through the tunnel (SEC seconds, 60 by default); if it does not work, the old config comes back by itself.
+  It runs as a background job (`start-stop-daemon`), so a dropped SSH session does not stop the check or the rollback;
+  `tt-stats apply-status` shows the result.
+- **`tt-stats apply 'tt://…'`** takes only the server part (`[endpoint]`) from a server link (via `setup_wizard`) and
+  keeps the rest: tunnel, kill switch, routes and the router's `has_ipv6`. Configs the line merge cannot read safely
+  (multi-line strings, `[[tables]]`, quoted or spaced table names) are refused instead of guessed.
+- Built to survive the bad moments: one operation at a time (a lock with the owner's pid and process start time,
+  a stale lock is taken over under a separate guard); the lock is handed to the background job by renaming a
+  per-operation file, so exactly one side wins; the config is written all or nothing; a hung init script is stopped
+  after 120 s; an interrupted apply leaves a marker, and new applies are refused until its backup is restored;
+  temporary copies are private (umask 077).
+
+### Self-test (`tt-stats selftest`)
+
+- Read-only: client, tunnel device, the internet through the VPN, exit IP, DNS over HTTPS (HTTP success, status 0 and a
+  real A record), kill switch, auth key, the last watchdog check, free memory, and how many server addresses the config
+  has (one address = a warning: no spare). The exit code is the number of failed checks.
+
+### Auth key on MIPS routers (`tt-stats keybuild`) — new, checked on one router so far
+
+- `tt-stats status` and `selftest` warn when the client config has `client_random_auth_key` but the client build
+  ignores it (the official MIPS client is built with OpenSSL; the auth key code needs BoringSSL).
+- **`tt-stats keybuild install`** swaps in this project's client build with auth key support (official sources +
+  a small OpenSSL patch, see `docs/keybuild`): download from the release, `sha256` check, test start on the router,
+  the previous client kept; rollback by itself if the VPN does not come up in 90 s or fails 4 checks in a row in the
+  next 10 minutes. `tt-stats keybuild revert` puts the previous client back.
+- **The installer offers it** on a MIPS router whose client ignores the key (default answer: no), with a warning
+  that the feature is new.
+- `docs/keybuild`: the patches, a build script, NOTICE and the Apache-2.0 license of the client and OpenSSL.
+
 ## v2.3.5 — memory guard: black box, early restart, DNS limit; WAN hook without needless restarts
 
 Everything here came from real evenings on a 128 MB router (Keenetic with zram) and was checked on it under
