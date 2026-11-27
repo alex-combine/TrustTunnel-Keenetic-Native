@@ -38,7 +38,7 @@ tt-stats selftest            # «auth key: set, this client build supports it»
 
 ## Собрать самому
 
-Linux x86_64, около 10 ГБ места, TIME_RU. Нужны `git`, `curl`, `python3`, `make`, `file` и `mipsel-linux-gnu-strip` (Debian/Ubuntu: `apt install binutils-mipsel-linux-gnu`). Остальное скрипт скачает сам: zig 0.17.1 (со сверкой контрольной суммы), Rust 1.95 и nightly с `rust-src`, conan 2.34, cmake, ninja.
+Linux x86_64, около 10 ГБ места, около 45 минут на двух ядрах (замер, без учёта загрузки zig). Нужны `git`, `curl`, `python3`, `make`, `file` и `mipsel-linux-gnu-strip` (Debian/Ubuntu: `apt install binutils-mipsel-linux-gnu`). Остальное скрипт скачает сам: zig 0.17.1 (со сверкой контрольной суммы), Rust 1.95 и nightly с `rust-src`, conan 2.34, cmake, ninja.
 
 ```bash
 ./build.sh /путь/к/рабочей/папке
@@ -46,7 +46,7 @@ Linux x86_64, около 10 ГБ места, TIME_RU. Нужны `git`, `curl`, 
 
 Если ziglang.org отдаёт медленно (скрипт делает до 10 попыток с докачкой), скачайте `zig-x86_64-linux-0.17.1.tar.xz` другим путём и положите как `<рабочая папка>/tools/zig.tar.xz`: скрипт докачает остаток и сверит контрольную сумму.
 
-Результат — `trusttunnel_client-authkey-mipsel` и `.sha256`. Сверка: в бинарнике **нет** строки `SSL_set_custom_client_random is unavailable` (она есть только в сборках без поддержки ключа).
+Результат — `trusttunnel_client-authkey-mipsel` и `.sha256`. Контрольная сумма не совпадёт с файлом из выпуска: в бинарник попадают пути рабочей папки. Сверка: в бинарнике **нет** строки `SSL_set_custom_client_random is unavailable` (она есть только в сборках без поддержки ключа).
 
 ## Лицензии
 

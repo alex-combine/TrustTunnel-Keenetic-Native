@@ -11,7 +11,8 @@
   the `selftest` exit code; troubleshooting for "the server does not let the router in" and for refused
   `apply`/`keybuild`; the file layout; version examples (v2.4.0); credits for TrustTunnelClient, OpenSSL and AdGuard.
 - `docs/keybuild`: a wrong key is recognized by the server (`validation failed`), whether it gets in depends on the
-  server rule; disk space and build time measured.
+  server rule; disk space and build time measured (a clean build with build.sh: about 45 minutes on 2 cores);
+  build.sh resumes and retries a slow zig download.
 
 ## v2.4.0 — safe config changes, self-test, auth key on MIPS routers
 

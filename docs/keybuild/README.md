@@ -38,7 +38,7 @@ Have your own build? `tt-stats keybuild install /path/to/file` (put `file.sha256
 
 ## Build it yourself
 
-Linux x86_64, about 10 GB of disk, TIME_EN. Needs `git`, `curl`, `python3`, `make`, `file` and `mipsel-linux-gnu-strip` (Debian/Ubuntu: `apt install binutils-mipsel-linux-gnu`). The script fetches the rest: zig 0.17.1 (checksum verified), Rust 1.95 + nightly with `rust-src`, conan 2.34, cmake, ninja.
+Linux x86_64, about 10 GB of disk, about 45 minutes on 2 cores (measured, without the zig download). Needs `git`, `curl`, `python3`, `make`, `file` and `mipsel-linux-gnu-strip` (Debian/Ubuntu: `apt install binutils-mipsel-linux-gnu`). The script fetches the rest: zig 0.17.1 (checksum verified), Rust 1.95 + nightly with `rust-src`, conan 2.34, cmake, ninja.
 
 ```bash
 ./build.sh /path/to/workdir
@@ -46,7 +46,7 @@ Linux x86_64, about 10 GB of disk, TIME_EN. Needs `git`, `curl`, `python3`, `mak
 
 If ziglang.org is slow (the script makes up to 10 tries and resumes), get `zig-x86_64-linux-0.17.1.tar.xz` another way and put it as `<workdir>/tools/zig.tar.xz`: the script resumes it and verifies the checksum.
 
-The result is `trusttunnel_client-authkey-mipsel` + `.sha256`. Check: the binary does **not** contain `SSL_set_custom_client_random is unavailable` (only builds without key support do).
+The result is `trusttunnel_client-authkey-mipsel` + `.sha256`. Its checksum will not match the release file: the binary contains the paths of the work folder. Check: the binary does **not** contain `SSL_set_custom_client_random is unavailable` (only builds without key support do).
 
 ## Licenses
 
