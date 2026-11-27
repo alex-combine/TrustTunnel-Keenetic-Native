@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.4.1 — README fixes; keybuild revert never goes back over a newer client
+
+- `tt-stats keybuild revert` refuses when the client now is not the build with the auth key (for example, the installer
+  updated the official client since): it no longer puts an older official client back over a newer one;
+  `tt-stats keybuild` then calls the kept copy "old copy, not in use" instead of "the way back".
+- README (both languages): the installer steps and the update table mention the offer of the build with the auth key;
+  the USB space it needs; mipsel only (no build for MIPS big-endian; ARM and x86 clients support the key themselves);
+  how to add the key with `tt-stats apply`; `apply-status`, the 5 kept backups and the minimum of 20 s; what counts in
+  the `selftest` exit code; troubleshooting for "the server does not let the router in" and for refused
+  `apply`/`keybuild`; the file layout; version examples (v2.4.0); credits for TrustTunnelClient, OpenSSL and AdGuard.
+- `docs/keybuild`: a wrong key is recognized by the server (`validation failed`), whether it gets in depends on the
+  server rule; disk space and build time measured.
+
 ## v2.4.0 — safe config changes, self-test, auth key on MIPS routers
 
 ### Change the client config safely (`tt-stats apply`)
@@ -31,8 +44,8 @@
   a small OpenSSL patch, see `docs/keybuild`): download from the release, `sha256` check, test start on the router,
   the previous client kept; rollback by itself if the VPN does not come up in 90 s or fails 4 checks in a row in the
   next 10 minutes. `tt-stats keybuild revert` puts the previous client back.
-- **The installer offers it** on a MIPS router whose client ignores the key (default answer: no), with a warning
-  that the feature is new.
+- **The installer offers it** on a MIPS little-endian (mipsel) router whose client ignores the key (default answer:
+  no), with a warning that the feature is new. There is no build for MIPS big-endian (`mips`) yet.
 - `docs/keybuild`: the patches, a build script, NOTICE and the Apache-2.0 license of the client and OpenSSL.
 
 ## v2.3.5 — memory guard: black box, early restart, DNS limit; WAN hook without needless restarts

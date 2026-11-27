@@ -36,7 +36,7 @@
 #
 # Log: /opt/var/log/tt-stats.log, memory guard: /opt/var/log/tt-memguard.log
 
-TTS_VERSION="2.4.0"
+TTS_VERSION="2.4.1"
 SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 TTS_REPO_URL="${TTS_REPO_URL:-https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download}"
 
@@ -1154,7 +1154,13 @@ cmd_keybuild_status() {
     has_key_support "$CLIENT_BIN"
     case $? in 0) k="supports the auth key" ;; 1) k="ignores the auth key" ;; *) k="cannot tell" ;; esac
     echo "Client:          $(bin_version "$CLIENT_BIN" || true) ($k)"
-    [ -s "$KB_OFFICIAL" ] && echo "Replaced client: $KB_OFFICIAL ($(bin_version "$KB_OFFICIAL")) - back to it: tt-stats keybuild revert"
+    if [ -s "$KB_OFFICIAL" ]; then
+        if has_key_support "$CLIENT_BIN"; then
+            echo "Replaced client: $KB_OFFICIAL ($(bin_version "$KB_OFFICIAL")) - back to it: tt-stats keybuild revert"
+        else   # the client was updated since (by the installer): the old copy is no longer the way back
+            echo "Old copy:        $KB_OFFICIAL ($(bin_version "$KB_OFFICIAL")) - not in use, the client was updated since; can be deleted"
+        fi
+    fi
     kb_eligible && echo "This router can use the client build with auth key support: tt-stats keybuild install"
     if [ -d "$APPLY_LOCK" ] && lock_owner_alive; then
         echo "Running now: $(apply_state_text)"
@@ -1209,6 +1215,7 @@ cmd_keybuild_install() {  # $1 = optional local file instead of the download
 cmd_keybuild_revert() {
     kb_begin
     [ -s "$KB_OFFICIAL" ] || die "no replaced client to go back to ($KB_OFFICIAL)"
+    has_key_support "$CLIENT_BIN" || die "the client now is not the build with auth key support ($(bin_version "$CLIENT_BIN")); nothing to revert"
     cmp -s "$KB_OFFICIAL" "$CLIENT_BIN" && { echo "The replaced client is already in place."; rm -f "$KB_OFFICIAL"; return 0; }
     cp -p "$KB_OFFICIAL" "$KB_NEW" && chmod 755 "$KB_NEW" || die "cannot stage the client (free space in $TT_DIR?)"
     apply_launch keybuild-revert-run 90

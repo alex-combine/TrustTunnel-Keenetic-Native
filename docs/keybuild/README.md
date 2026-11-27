@@ -2,14 +2,14 @@
 
 [🇷🇺 Русский](README_ru.md)
 
-**Why.** In TrustTunnel 1.3 a server can let in only clients with an auth key (`client_random_auth_key`). The official client for MIPS little-endian (mipsel) routers — most Keenetic models — is built with OpenSSL, while the auth key code is enabled only with BoringSSL. So that client **silently ignores** the key, and a server that requires it will not let the router in.
+**Why.** In TrustTunnel 1.3 a server can let in only clients with an auth key (`client_random_auth_key`). The official clients for MIPS CPUs are built with OpenSSL, while the auth key code is enabled only with BoringSSL. So these clients **silently ignore** the key, and a server that requires it will not let the router in. This build is for MIPS little-endian (mipsel) — most Keenetic models; there is none for MIPS big-endian (`mips`) yet, and the ARM and x86 clients do not need it.
 
 **What was done.** The same client sources (`7bde23f`, 1.3.0 + 2 commits) with two small patches:
 
 - OpenSSL 4.0.2: `SSL_set_custom_client_random()` — a caller-supplied 32-byte ClientRandom in the ClientHello, TLS 1.3 only (as in AdGuard's BoringSSL patch), and `HKDF()` with BoringSSL's argument order;
 - the client: the auth key code is built with OpenSSL.
 
-Both went through four rounds of external code review and were checked live: the server sees the key, and a wrong key is refused.
+Both went through four rounds of external code review and were checked live: with the right key the server accepts the client without an error, and it recognizes a wrong key (`validation failed` in its log; whether such a client gets in is up to the server rule).
 
 > **The feature is new: so far it was checked on one router.** It is installed with automatic rollback.
 
@@ -38,11 +38,13 @@ Have your own build? `tt-stats keybuild install /path/to/file` (put `file.sha256
 
 ## Build it yourself
 
-Linux x86_64, about 25 GB, 1–2 hours on 2 cores. Needs `git`, `curl`, `python3`, `make`, `file` and `mipsel-linux-gnu-strip` (Debian/Ubuntu: `apt install binutils-mipsel-linux-gnu`). The script fetches the rest: zig 0.17.1 (checksum verified), Rust 1.95 + nightly with `rust-src`, conan 2.34, cmake, ninja.
+Linux x86_64, about 10 GB of disk, TIME_EN. Needs `git`, `curl`, `python3`, `make`, `file` and `mipsel-linux-gnu-strip` (Debian/Ubuntu: `apt install binutils-mipsel-linux-gnu`). The script fetches the rest: zig 0.17.1 (checksum verified), Rust 1.95 + nightly with `rust-src`, conan 2.34, cmake, ninja.
 
 ```bash
 ./build.sh /path/to/workdir
 ```
+
+If ziglang.org is slow (the script makes up to 10 tries and resumes), get `zig-x86_64-linux-0.17.1.tar.xz` another way and put it as `<workdir>/tools/zig.tar.xz`: the script resumes it and verifies the checksum.
 
 The result is `trusttunnel_client-authkey-mipsel` + `.sha256`. Check: the binary does **not** contain `SSL_set_custom_client_random is unavailable` (only builds without key support do).
 

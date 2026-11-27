@@ -17,8 +17,14 @@ command -v mipsel-linux-gnu-strip >/dev/null || die "mipsel-linux-gnu-strip not 
 step "1 tools: zig $ZIG_VER, Rust $RUST_VER + nightly rust-src, conan/cmake/ninja"
 mkdir -p "$W/tools" && cd "$W/tools" || exit 1
 if [ ! -x zig/zig ]; then
-    curl -fsSL -o zig.tar.xz "https://ziglang.org/download/$ZIG_VER/zig-x86_64-linux-$ZIG_VER.tar.xz" || die "zig download"
-    echo "$ZIG_SHA  zig.tar.xz" | sha256sum -c --quiet || die "zig checksum"
+    # ziglang.org can be slow or stall: resume, give up on a stalled try after 30 s, up to 10 tries
+    for _i in 1 2 3 4 5 6 7 8 9 10; do
+        curl -fsSL -C - --speed-limit 1000 --speed-time 30 -o zig.tar.xz \
+            "https://ziglang.org/download/$ZIG_VER/zig-x86_64-linux-$ZIG_VER.tar.xz" && \
+            echo "$ZIG_SHA  zig.tar.xz" | sha256sum -c --quiet 2>/dev/null && break
+        echo "zig download try $_i failed, retrying..."; sleep 5
+    done
+    echo "$ZIG_SHA  zig.tar.xz" | sha256sum -c --quiet || die "zig download or checksum failed"
     tar -xf zig.tar.xz && rm zig.tar.xz && ln -sfn "zig-x86_64-linux-$ZIG_VER" zig
 fi
 [ -x venv/bin/conan ] || { python3 -m venv venv && venv/bin/pip install -q "conan==2.34.0" cmake ninja pyyaml tqdm; } || die "python tools"

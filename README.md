@@ -16,7 +16,7 @@
 > - **Safe config changes** (`tt-stats apply`, also by a `tt://…` link) with automatic rollback, a one-command **self-test**, and the **auth key on MIPS routers** — our own client build (new).
 > - **Razvilka** (optional, beta): sites of your own country go direct, everything else via VPN; your own Telegram bot on the router.
 >
-> Jump to: [Quick start](#quick-start) · [Updating](#trusttunnel-already-installed-updating-from-any-version) · [If something is wrong](#if-something-is-wrong) · [Razvilka](#razvilka-beta-home-country-direct-everything-else-via-vpn)
+> Jump to: [Quick start](#quick-start) · [Updating](#trusttunnel-already-installed-updating-from-any-version) · [If something is wrong](#if-something-is-wrong) · [Config changes and auth key](#safe-config-changes-self-test-auth-key-24) · [Razvilka](#razvilka-beta-home-country-direct-everything-else-via-vpn)
 >
 > ⭐ **Using it and like it?** Give the project a star on GitHub (the **Star** button at the top right) — it helps others find it and shows me the work is useful.
 
@@ -34,7 +34,7 @@
    curl -fsSL https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest/download/install.sh | sh
    ```
 4. **What to answer:** the language; mode **2 — TUN** (needed for the statistics and Razvilka); interface index — Enter; «Create TrustTunnel interface?» — **y**; «Install/Update TrustTunnel Client?» — **y**. Then the installer finds `config.toml`, builds the config, starts the VPN and checks for up to 2 minutes that the internet goes through it.
-5. **Done** when you see `✅ The VPN works`. At the end the installer offers Razvilka — you can say no. Check later: `tt-stats status`.
+5. **Done** when you see `✅ The VPN works`. At the end the installer may offer the client build with auth key support (only on routers with a MIPS little-endian CPU) and Razvilka — you can say no to both. Check later: `tt-stats status` or `tt-stats selftest`.
 
 If it fails, the installer puts everything back and shows the reason: see [If something is wrong](#if-something-is-wrong). VPN already installed? The same command updates it: see [Updating](#trusttunnel-already-installed-updating-from-any-version).
 
@@ -66,7 +66,7 @@ If it fails, the installer puts everything back and shows the reason: see [If so
 
 ## What it takes from the router
 
-- **USB stick:** the TrustTunnel client about 12 MB, its setup wizard about 2 MB, the scripts a few dozen KB. An update needs at least 2 MB free (for the backups).
+- **USB stick:** the TrustTunnel client about 15 MB (1.3.0), its setup wizard about 2 MB, the scripts a few dozen KB. An update needs at least 2 MB free (for the backups). Installing the client build with auth key support needs about 50 MB free (the new file and temporary copies); afterwards about 15 MB stay for the copy of the previous client.
 - **RAM:** the client takes a few MB (about 4 MB on a Keenetic Hero 4G when idle, more during big downloads — routers with 128 MB have the [memory guard](#optional-memory-guard-routers-with-128-mb)), the service watchdog about 1.5 MB.
 - **Razvilka** (if you install it) — about 1 MB more on the USB stick and about 8 MB of RAM, see [its README](razvilka/README.md#how-much-it-takes-from-the-router).
 
@@ -177,7 +177,7 @@ The installer first asks for the language — Russian or English (or pass `--lan
 > The script automatically detects the latest stable version (GitHub Release).
 > To install a specific version:
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --version v2.3.4
+> curl -fsSL https://raw.githubusercontent.com/alex-combine/TrustTunnel-Keenetic-Native/main/install.sh | sh -s -- --version v2.4.0
 > ```
 
 > To install from the `main` branch (latest dev version):
@@ -194,7 +194,8 @@ The installation script will perform the following:
 6. Prompt to create an interface (ProxyN for SOCKS5 or OpkgTunN for TUN) in Keenetic; when changing the mode or index, it will delete the old interface
 7. Prompt to install/update the TrustTunnel client — on a new install answer «y», without the client the VPN cannot be set up (supported architectures: x86_64, aarch64, armv7, mips, mipsel)
 8. Find the `config.toml` exported on the server (in `/opt/tmp/` and other usual places, or ask for its path or a `tt://` link), build the client config from it (the right listener for the mode, kill switch on, file closed with 600), start the VPN and check that the internet really goes through it. If it does not within 2 minutes, roll back and show the last log lines
-9. In TUN mode, when the VPN works: offer to install Razvilka right away (optional)
+9. When the VPN works: on a MIPS little-endian (mipsel) router whose official client cannot use the auth key, offer the client build that supports it (default: no, see [auth key](#auth-key-client_random_auth_key-and-a-client-build-that-supports-it))
+10. In TUN mode, when the VPN works: offer to install Razvilka right away (optional)
 
 ### TrustTunnel already installed? Updating from any version
 
@@ -209,7 +210,7 @@ The same single command. Before changing anything the installer looks at what is
 
 The «Found → Plan» screen offers three choices: **1 — update and keep the settings** (default), **2 — set up again** (all questions, as in a new install), **3 — quit**. Your server address and password are kept: when the mode changes the installer rebuilds your current client config, `config.toml` from the server is not needed. Old files are copied to `/opt/backup/tt_update_<time>/`. If the VPN worked before the update and does not after it, everything is put back automatically; an interrupted run (Ctrl+C, a dropped SSH session) puts the previous files back too. Every step goes to the journal `/opt/var/log/tt-install.log`; after an interruption just run the command again.
 
-The TrustTunnel client itself is not changed by an update (choice 1). To update it — choice 2 and «y» to the client question (attach mode needs client 1.0.62 or newer).
+The TrustTunnel client itself is not changed by an update (choice 1) — unless you accept the client build with auth key support (the installer offers it after the VPN check). To update the official client — choice 2 and «y» to the client question (attach mode needs client 1.0.62 or newer); this replaces the build with the auth key, and the installer offers it again.
 
 See what is installed and what would be done, changing nothing:
 ```bash
@@ -403,9 +404,10 @@ All actions are logged to `/opt/var/log/tt-stats.log`.
 | `tt-stats version` | Helper version |
 | `tt-stats update-check` | Is a newer release out? (reads only the version number); `--remove-cron` turns the daily check off |
 | `tt-stats memguard [on [kB]\|off]` | Memory guard for routers with 128 MB (see below) |
-| `tt-stats apply FILE\|tt://…` | Change the client config with a check and automatic rollback |
-| `tt-stats selftest` | Check everything: client, tunnel, IP, DNS, kill switch, auth key |
-| `tt-stats keybuild [install\|revert]` | Client build with auth key support (MIPS routers) |
+| `tt-stats apply FILE\|tt://… [sec]` | Change the client config with a check and automatic rollback |
+| `tt-stats apply-status` | Result of the last config or client change |
+| `tt-stats selftest` | Check everything: client, tunnel, IP, DNS, kill switch, auth key (read-only) |
+| `tt-stats keybuild [install [FILE]\|revert]` | Client build with auth key support (mipsel routers); no argument — what is installed |
 
 ### Recommended: kill switch
 
@@ -471,17 +473,17 @@ tt-stats apply /opt/tmp/new.toml          # or a link: tt-stats apply 'tt://…'
 tt-stats apply-status                     # the result
 ```
 
-`apply` backs up the config, puts the new file in place, restarts the client and checks the internet through the tunnel for up to 60 seconds (the second argument sets your own time). If it does not work, the old file comes back by itself. The work runs in the background: you can close SSH, a dropped connection does not stop the rollback. A `tt://…` link (the server gives it) replaces only the server part `[endpoint]`; the tunnel, kill switch, routes and the router's `has_ipv6` stay as they are. This is also the easy way to move to a new server or to add a spare address to `addresses = [...]`: the client moves to the next address by itself when the first one stops answering.
+`apply` backs up the config (to `/opt/trusttunnel_client/backup-apply/`, the last 5 are kept), puts the new file in place, restarts the client and checks the internet through the tunnel for up to 60 seconds (the second argument sets your own time, at least 20). If it does not work, the old file comes back by itself. Only one change runs at a time; if the previous one was interrupted (for example, the router was switched off), a new one does not start until its backup is restored — `tt-stats apply-status` shows the command. The work runs in the background: you can close SSH, a dropped connection does not stop the rollback. A `tt://…` link (the server gives it) replaces only the server part `[endpoint]`; the tunnel, kill switch, routes and the router's `has_ipv6` stay as they are. This is also the easy way to move to a new server or to add a spare address to `addresses = [...]`: the client moves to the next address by itself when the first one stops answering.
 
 ### Check everything with one command: `tt-stats selftest`
 
-Read-only, changes nothing: the client runs, the tunnel is up, the internet works through the VPN, the exit IP, DNS over HTTPS, the kill switch, the auth key, the last watchdog check, free memory, and how many server addresses the config has (one is a warning: no spare). The exit code is the number of failed checks.
+Read-only, changes nothing: the client runs, the tunnel is up, the internet works through the VPN, the exit IP, DNS over HTTPS, the kill switch, the auth key, the last watchdog check, free memory, and how many server addresses the config has (one is a warning: no spare). The exit code is the number of failed checks (`[FAIL]`); warnings (`[WARN]`) do not count.
 
 ### Auth key (`client_random_auth_key`) and a client build that supports it
 
-TrustTunnel 1.3 can let only "own" clients in, by an auth key. The official client for routers with a **MIPS** CPU (most Keenetic models) is built with OpenSSL and **silently ignores** the key — a server that requires the key will not let such a router in. `tt-stats status` and `selftest` warn about it.
+TrustTunnel 1.3 can let only "own" clients in, by an auth key. The official client for routers with a **MIPS** CPU (most Keenetic models) is built with OpenSSL and **silently ignores** the key — a server that requires the key will not let such a router in. The clients for ARM and x86 are built with BoringSSL and support the key themselves. `tt-stats status` and `selftest` warn when the config has a key the client does not use.
 
-Our project builds the client from the same sources with a small OpenSSL patch (a custom ClientRandom, as in BoringSSL). **The feature is new: so far it was checked on one router.** The installer offers it on a router that needs it (the default answer is "no"), or by hand:
+Our project builds the client from the same sources with a small OpenSSL patch (a custom ClientRandom, as in BoringSSL) — **for MIPS little-endian (mipsel) only**; there is no build for MIPS big-endian (`mips`) yet. **The feature is new: so far it was checked on one router** (Keenetic Hero 4G). The installer offers it on a router that needs it (the default answer is "no"), or by hand:
 
 ```bash
 tt-stats keybuild            # what is installed and whether this router needs the build
@@ -489,7 +491,18 @@ tt-stats keybuild install    # download, verify the checksum, install with autom
 tt-stats keybuild revert     # put the previous client back
 ```
 
-How it is installed: the file is downloaded from the GitHub release and checked against its `sha256`, test-started on the router, and the previous client is kept (`/opt/trusttunnel_client/trusttunnel_client.official`). If the VPN does not come up in 90 seconds or fails 4 checks in a row in the next 10 minutes, the previous client comes back by itself. Add the key to the client config after that, with `tt-stats apply`. The patches, licenses and how to build it yourself: [docs/keybuild](docs/keybuild/README.md).
+How it is installed: the file is downloaded from the GitHub release and checked against its `sha256`, test-started on the router, and the previous client is kept (`/opt/trusttunnel_client/trusttunnel_client.official`). If the VPN does not come up in 90 seconds or fails 4 checks in a row in the next 10 minutes, the previous client comes back by itself. You can close SSH: the result is in `tt-stats apply-status`.
+
+Then add the key to the client config, with automatic rollback too:
+
+```bash
+cp /opt/trusttunnel_client/trusttunnel_client.toml /opt/tmp/new.toml
+# in /opt/tmp/new.toml, section [endpoint]:  client_random_auth_key = "<the key from the server>"
+tt-stats apply /opt/tmp/new.toml
+tt-stats selftest              # "auth key: set, this client build supports it"
+```
+
+The patches, licenses and how to build it yourself: [docs/keybuild](docs/keybuild/README.md).
 
 ## Razvilka (beta): home country direct, everything else via VPN
 
@@ -507,7 +520,7 @@ The installer offers it at the very end, once the VPN works; or see [razvilka/RE
 ```
 /opt/
 ├── bin/
-│   └── tt-stats                    # Helper: status / enable / disable / reboot / memguard / update-check
+│   └── tt-stats                    # Helper: status / enable / disable / reboot / memguard / update-check / apply / selftest / keybuild
 ├── etc/
 │   ├── init.d/
 │   │   ├── S99trusttunnel          # Main init script
@@ -528,12 +541,16 @@ The installer offers it at the very end, once the VPN works; or see [razvilka/RE
 │       ├── trusttunnel.log.old     # Previous log after rotation
 │       ├── tt-stats.log            # tt-stats log (switches, rollbacks, boot guard)
 │       ├── tt-memguard.log         # Memory guard log
+│       ├── tt-blackbox.log         # Memory guard black box
 │       └── tt-install.log          # Installer journal (the steps of every run)
 ├── backup/                         # Copies before changes: tt_update_<time>/, tt_setup_<time>/
 └── trusttunnel_client/
     ├── trusttunnel_client          # Client binary
+    ├── trusttunnel_client.official # Previous client after tt-stats keybuild install (for revert)
+    ├── setup_wizard                # Client setup wizard (also used by apply tt://…)
     ├── trusttunnel_client.toml     # Configuration
     ├── mode.conf                   # Operation mode (socks5/tun), TUN_IDX, PROXY_IDX, TUN_MTU, HC settings
+    ├── backup-apply/               # Config backups made by tt-stats apply (the last 5)
     └── backup-classic/             # Classic setup backup made by tt-stats enable (+ MD5SUMS)
 ```
 
@@ -542,7 +559,7 @@ The installer offers it at the very end, once the VPN works; or see [razvilka/RE
 If you prefer manual installation instead of the script. These are only the service scripts: the client, `mode.conf`, the interface and the client config are as in the sections above. These commands also download from GitHub; if GitHub cannot be reached from the router, download the files on a computer and replace `curl … -o` with copying from `/opt/tmp/`.
 
 ```bash
-VERSION="v2.3.4"  # Specify the required version (GitHub Release tag)
+VERSION="v2.4.0"  # Specify the required version (GitHub Release tag)
 
 # Create directories
 mkdir -p /opt/etc/init.d
@@ -707,6 +724,22 @@ If the install command stops with `curl: (35) Recv failure: Connection reset by 
 2. Download the release files on a computer from the [Releases](https://github.com/alex-combine/TrustTunnel-Keenetic-Native/releases/latest) page (`S99trusttunnel`, `010-trusttunnel.sh`, `tt-stats`, optionally `razvilka.tar.gz`), copy them to the router (for example with WinSCP or `scp` into `/opt/tmp/`) and put them in place by [Manual Installation](#manual-installation), replacing `curl` with copying. The installer itself does not work without GitHub — it downloads the files.
 3. If the router already has a working VPN connection, send `github.com` and `githubusercontent.com` through it (Routing → DNS routes in the Keenetic web interface) and run the command again.
 
+### The server does not let the router in after the auth key was turned on
+
+```bash
+tt-stats selftest
+```
+
+- `auth key ... IGNORES it` — the official MIPS client does not use the key: `tt-stats keybuild install` (mipsel routers), or do not make the key mandatory on the server yet.
+- `auth key not used` — the key is not in `[endpoint]` of the client config: add it with `tt-stats apply` (see [auth key](#auth-key-client_random_auth_key-and-a-client-build-that-supports-it)).
+- The key is set and supported, and the server still refuses — compare the key with the server: it must match character for character.
+
+### `tt-stats apply` or `keybuild` refuses
+
+- `another apply is running` — another config or client change is running now; wait for its result: `tt-stats apply-status` (after `keybuild install` the watch lasts 10 minutes).
+- `an earlier apply did not finish` — the previous change was interrupted (for example, the router was switched off during the check). If the VPN does not work, restore the backup with the command from that message (`tt-stats apply <backup>`); if it works with the current config, remove the marker with the `rm …` command the message also shows.
+- `this build is for MIPS little-endian (mipsel) routers` — your CPU does not need the build with the key, or there is none for it yet.
+
 ### Client doesn't start
 ```bash
 # Check permissions
@@ -805,4 +838,4 @@ If the installer saved you an evening and your router just works, please click �
 
 ## Credits
 
-Based on [TrustTunnel-Keenetic](https://github.com/artemevsevev/TrustTunnel-Keenetic) by Artem Evsevev (MIT). Attach mode relies on `use_existing` in the [TrustTunnel](https://github.com/TrustTunnel/TrustTunnel) client.
+Based on [TrustTunnel-Keenetic](https://github.com/artemevsevev/TrustTunnel-Keenetic) by Artem Evsevev (MIT). Attach mode relies on `use_existing` in the [TrustTunnel](https://github.com/TrustTunnel/TrustTunnel) client. The client build with auth key support is made from the [TrustTunnelClient](https://github.com/TrustTunnel/TrustTunnelClient) and [OpenSSL](https://www.openssl.org/) sources (Apache 2.0) with AdGuard's MIPS patch; what was changed is in [docs/keybuild/NOTICE](docs/keybuild/NOTICE).
