@@ -1156,7 +1156,11 @@ cmd_keybuild_status() {
     echo "Client:          $(bin_version "$CLIENT_BIN" || true) ($k)"
     [ -s "$KB_OFFICIAL" ] && echo "Replaced client: $KB_OFFICIAL ($(bin_version "$KB_OFFICIAL")) - back to it: tt-stats keybuild revert"
     kb_eligible && echo "This router can use the client build with auth key support: tt-stats keybuild install"
-    [ -s "$KB_PENDING" ] && echo "INTERRUPTED: a client switch did not finish. If the VPN does not work: tt-stats keybuild revert"
+    if [ -d "$APPLY_LOCK" ] && lock_owner_alive; then
+        echo "Running now: $(apply_state_text)"
+    elif [ -s "$KB_PENDING" ]; then
+        echo "INTERRUPTED: a client switch did not finish. If the VPN does not work: tt-stats keybuild revert"
+    fi
     return 0
 }
 
